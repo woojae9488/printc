@@ -325,13 +325,13 @@ def scale_text(job: Job, unit: list[Stroke]) -> list[Stroke]:
     if job.char_height is None:
         height = min(fit, AUTO_CHAR_HEIGHT_CAP)
         if height < min_height:
-            raise CreamTextError(f"문구가 너무 김: 가능한 글자 높이 {fit:.1f}mm < 최소 {min_height:.1f}mm")
+            raise CreamTextError(f"문구가 너무 김: 가능한 글자 높이 {fit:.1f} mm < 최소 {min_height:.1f} mm")
     else:
         height = job.char_height
         if height < min_height:
-            raise CreamTextError(f"글자 높이 {height:g}mm < 최소 {min_height:.1f}mm(선 폭 기준)")
+            raise CreamTextError(f"글자 높이 {height:g} mm < 최소 {min_height:.1f} mm(선 폭 기준)")
         if height > fit:
-            raise CreamTextError(f"글씨가 케이크 반경 밖: 글자 높이 최대 {max(fit, 0):.1f}mm")
+            raise CreamTextError(f"글씨가 케이크 반경 밖: 글자 높이 최대 {max(fit, 0):.1f} mm")
     return [[(x * height, y * height) for x, y in stroke] for stroke in unit]
 
 
@@ -370,7 +370,7 @@ class GcodeWriter:
     def _check(self, axis: str, value: float) -> None:
         low, high = self.machine.limits[axis]
         if not low <= value <= high:
-            raise CreamTextError(f"범위 초과: {axis.upper()}{value:.3f} (허용 {low}~{high})")
+            raise CreamTextError(f"범위 초과: {axis.upper()}{value:.3f} (허용 {low}–{high})")
 
     def move(self, *, x: float | None = None, y: float | None = None, z: float | None = None,
              e: float = 0.0, speed: float) -> None:
@@ -389,7 +389,7 @@ class GcodeWriter:
 
     def set_tool(self, tool: int) -> None:
         if tool >= self.machine.tool_count:
-            raise CreamTextError(f"T{tool} 없음: tool_count {self.machine.tool_count}")
+            raise CreamTextError(f"카트리지 T{tool} 없음: tool_count {self.machine.tool_count}")
         self.tool = tool
         # 매크로가 헤드를 옮기므로 위치를 모름으로 둠.
         self.position.clear()
@@ -442,7 +442,7 @@ def write_dab(w: GcodeWriter, job: Job, point: Point, write_z: float, travel_z: 
 def check_job(machine: Machine, job: Job) -> None:
     if job.bead_area > machine.max_cross_section:
         raise CreamTextError(
-            f"선 단면 {job.bead_area:.2f}mm² > max_extrude_cross_section {machine.max_cross_section:.2f}mm²")
+            f"선 단면 {job.bead_area:.2f} mm² > max_extrude_cross_section {machine.max_cross_section:.2f} mm²")
     for name in ("cake_diameter", "height", "line_width", "line_height"):
         if getattr(job, name) <= 0:
             raise CreamTextError(f"{name}는 0보다 커야 함")
@@ -453,7 +453,7 @@ def check_job(machine: Machine, job: Job) -> None:
             raise CreamTextError(f"{name}는 0 이상이어야 함")
     for name, used in (("margin", True), ("border_inset", job.border), ("flower_inset", bool(job.flowers))):
         if used and getattr(job, name) >= job.cake_radius:
-            raise CreamTextError(f"{name} {getattr(job, name):g}mm >= 케이크 반지름 {job.cake_radius:g}mm")
+            raise CreamTextError(f"{name} {getattr(job, name):g} mm >= 케이크 반경 {job.cake_radius:g} mm")
     if job.flowers < 0 or (job.flowers and job.flower_ml <= 0):
         raise CreamTextError("flowers, flower_ml 값 오류")
 
@@ -516,16 +516,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="케이크 지름 mm. 기본 3호")
     p.add_argument("--height", type=float, default=DEFAULT_CAKE_HEIGHT,
                    help="케이크 높이 mm (판 윗면 기준). 기본 3호")
-    p.add_argument("--gap", type=float, help="케이크 윗면 ~ 깍지 끝 mm. 생략 시 _CREAM_CFG gap")
+    p.add_argument("--gap", type=float, help="케이크 윗면에서 깍지 끝까지 mm. 생략 시 _CREAM_CFG gap")
     p.add_argument("--lift", type=float, default=5.0, help="획 사이 이동 시 추가 높이 mm")
     p.add_argument("--char-height", type=float, help="글자 높이 mm. 생략 시 맞춤")
     p.add_argument("--line-width", type=float, help="크림 선 폭 mm. 생략 시 _CREAM_CFG line_width")
     p.add_argument("--line-height", type=float, help="크림 선 높이 mm. 생략 시 _CREAM_CFG line_height")
-    p.add_argument("--margin", type=float, default=10.0, help="케이크 가장자리 ~ 글씨 최소 거리 mm")
+    p.add_argument("--margin", type=float, default=10.0, help="케이크 가장자리에서 글씨까지 최소 거리 mm")
     p.add_argument("--border", action="store_true", help=f"T{BORDER_TOOL} 테두리 추가")
-    p.add_argument("--border-inset", type=float, default=8.0, help="가장자리 ~ 테두리 mm")
+    p.add_argument("--border-inset", type=float, default=8.0, help="가장자리에서 테두리까지 mm")
     p.add_argument("--flowers", type=int, default=0, help=f"T{FLOWER_TOOL} 꽃 개수")
-    p.add_argument("--flower-inset", type=float, default=20.0, help="가장자리 ~ 꽃 중심 mm")
+    p.add_argument("--flower-inset", type=float, default=20.0, help="가장자리에서 꽃 중심까지 mm")
     p.add_argument("--flower-ml", type=float, default=0.5, help="꽃 하나 크림 mL")
     p.add_argument("--center", type=float, nargs=2, metavar=("X", "Y"),
                    help="케이크 중심. 생략 시 _CREAM_CFG center_x, center_y")
@@ -557,7 +557,7 @@ def main(argv: list[str] | None = None, root: Path = REPO_ROOT) -> int:
     except (CreamTextError, OSError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
-    summary = ", ".join(f"T{t} {v:.1f}mL" for t, v in sorted(volumes.items()))
+    summary = ", ".join(f"T{t} {v:.1f} mL" for t, v in sorted(volumes.items()))
     print(f"생성: {out.relative_to(root)} (짜는 크림 {summary}, PRIME 제외)")
     return 0
 

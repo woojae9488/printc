@@ -200,9 +200,9 @@ class BuildTest(TempProfileTest):
             ct.build_gcode(self.machine, make_job(char_height=1))
 
     def test_inset_beyond_radius(self) -> None:
-        with self.assertRaisesRegex(ct.CreamTextError, "flower_inset .* 반지름"):
+        with self.assertRaisesRegex(ct.CreamTextError, "flower_inset .* 반경"):
             ct.build_gcode(self.machine, make_job(flowers=4, flower_inset=120))
-        with self.assertRaisesRegex(ct.CreamTextError, "border_inset .* 반지름"):
+        with self.assertRaisesRegex(ct.CreamTextError, "border_inset .* 반경"):
             ct.build_gcode(self.machine, make_job(border=True, border_inset=105))
 
     def test_too_long(self) -> None:
@@ -226,7 +226,7 @@ class BuildTest(TempProfileTest):
 
     def test_tool_count(self) -> None:
         machine = ct.Machine(**{**self.machine.__dict__, "tool_count": 2})
-        with self.assertRaisesRegex(ct.CreamTextError, "T2 없음"):
+        with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T2 없음"):
             ct.build_gcode(machine, make_job(flowers=8))
 
     def test_cross_section(self) -> None:

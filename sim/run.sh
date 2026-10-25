@@ -83,12 +83,14 @@ printf '예상 시간: %s초\n' "$est"
 
 notes="$profile/NOTES.md"
 # 제목 다음 줄에 값이 있음.
-base="$(sed -n '/기준 시간/,$p' "$notes" 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)?[[:space:]]*초' | head -n 1 | grep -oE '[0-9]+(\.[0-9]+)?' || true)"
+base="$(sed -n '/기준 시간/,$p' "$notes" 2>/dev/null |
+  grep -oE '[0-9]+(\.[0-9]+)?[[:space:]]*초' | head -n 1 |
+  grep -oE '[0-9]+(\.[0-9]+)?' || true)"
 if [[ -z "$base" ]]; then
   printf '기준 시간: %s에서 찾지 못함\n' "$notes"
   exit 0
 fi
 awk -v e="$est" -v b="$base" 'BEGIN {
   d = e - b
-  printf "기준 시간(3호 케이크): %s초, 차이 %+.1f초 (%+.1f%%)\n", b, d, (b > 0 ? d / b * 100 : 0)
+  printf "기준 시간(3호 케이크): %s초, 차이 %+.1f초 (%+.1f %%)\n", b, d, (b > 0 ? d / b * 100 : 0)
 }'
