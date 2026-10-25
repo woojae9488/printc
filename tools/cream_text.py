@@ -3,6 +3,7 @@
 
 기계 값은 프로필 cfg에서 읽음. 작업 값(케이크 치수, 글씨 크기 등)은 인자로 받음.
 선 폭, 선 높이, 깍지 간격은 cfg 값을 쓰고 인자로 덮어쓸 수 있음.
+글씨는 폰트 윤곽선으로 그림. 사용법은 docs/lettering.md.
 """
 
 from __future__ import annotations
@@ -13,8 +14,10 @@ import configparser
 import math
 import re
 import sys
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Iterator, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILE = Path("hardware/active")
@@ -32,69 +35,26 @@ FLOWER_CLEARANCE_LINE_WIDTHS = 2.0
 # 3호 케이크 기본 작업 값.
 DEFAULT_CAKE_DIAMETER = 210.0
 DEFAULT_CAKE_HEIGHT = 150.0
+# --font 생략 시 폰트. DEFAULT_WEIGHT는 가변 폰트 wght 값, 가변이 아니면 None.
+DEFAULT_FONT = "Black Han Sans"
+DEFAULT_WEIGHT: float | None = None
+# 글자 높이는 em 높이. 줄 간격도 em 비율.
+FONT_LINE_PITCH_EM = 1.25
+FONT_STYLES = ("fill", "outline")
+FONT_FALLBACKS = ("auto", "none", "embolden", "center")
+# 요약에 보이는 순서. 폰트가 쓴 방법이 스타일과 다르면 폴백임.
+FALLBACK_ORDER = ("embolden", "center")
+NO_STROKE_METHOD = "none"
+# 폰트 윤곽 크기는 글자 높이에 비례하지 않으므로(선 폭만큼 안쪽) 줄여 가며 다시 맞춤.
+FONT_FIT_TRIES = 6
+FONT_FIT_SHRINK = 0.98
+VENV_HINT = ("설치: python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt, "
+             "실행: .venv/bin/python tools/cream_text.py ...")
+SVG_COLORS = {"text": "#8d6e63", "fallback": "#e65100", "border": "#1e88e5", "flower": "#d81b60",
+              "travel": "#9e9e9e", "cake": "#bdbdbd"}
 
 Point = tuple[float, float]
 Stroke = list[Point]
-
-# 글꼴 격자: 글자 높이 6, 기본 폭 4. 획은 꺾은선.
-GLYPH_HEIGHT = 6.0
-GLYPH_WIDTH = 4.0
-CHAR_GAP = 1.5
-LINE_GAP = 3.0
-_O = [(1, 0), (0, 1), (0, 5), (1, 6), (3, 6), (4, 5), (4, 1), (3, 0), (1, 0)]
-_P = [(0, 0), (0, 6), (3, 6), (4, 5), (4, 4), (3, 3), (0, 3)]
-_DOT = [(2, 0), (2, 0.4)]
-GLYPHS: dict[str, list[Stroke]] = {
-    " ": [],
-    "A": [[(0, 0), (2, 6), (4, 0)], [(0.67, 2), (3.33, 2)]],
-    "B": [_P, [(3, 3), (4, 2), (4, 1), (3, 0), (0, 0)]],
-    "C": [[(4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1)]],
-    "D": [[(0, 0), (0, 6), (2.5, 6), (4, 4.5), (4, 1.5), (2.5, 0), (0, 0)]],
-    "E": [[(4, 6), (0, 6), (0, 0), (4, 0)], [(0, 3), (3, 3)]],
-    "F": [[(4, 6), (0, 6), (0, 0)], [(0, 3), (3, 3)]],
-    "G": [[(4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1), (4, 3), (2, 3)]],
-    "H": [[(0, 0), (0, 6)], [(4, 0), (4, 6)], [(0, 3), (4, 3)]],
-    "I": [[(1, 6), (3, 6)], [(2, 6), (2, 0)], [(1, 0), (3, 0)]],
-    "J": [[(4, 6), (4, 1), (3, 0), (1, 0), (0, 1)]],
-    "K": [[(0, 0), (0, 6)], [(4, 6), (0, 2)], [(1.33, 3.33), (4, 0)]],
-    "L": [[(0, 6), (0, 0), (4, 0)]],
-    "M": [[(0, 0), (0, 6), (2, 3), (4, 6), (4, 0)]],
-    "N": [[(0, 0), (0, 6), (4, 0), (4, 6)]],
-    "O": [_O],
-    "P": [_P],
-    "Q": [_O, [(2.5, 1.5), (4, 0)]],
-    "R": [_P, [(2, 3), (4, 0)]],
-    "S": [[(4, 5), (3, 6), (1, 6), (0, 5), (0, 4), (1, 3), (3, 3), (4, 2), (4, 1), (3, 0), (1, 0), (0, 1)]],
-    "T": [[(0, 6), (4, 6)], [(2, 6), (2, 0)]],
-    "U": [[(0, 6), (0, 1), (1, 0), (3, 0), (4, 1), (4, 6)]],
-    "V": [[(0, 6), (2, 0), (4, 6)]],
-    "W": [[(0, 6), (1, 0), (2, 4), (3, 0), (4, 6)]],
-    "X": [[(0, 6), (4, 0)], [(4, 6), (0, 0)]],
-    "Y": [[(0, 6), (2, 3), (4, 6)], [(2, 3), (2, 0)]],
-    "Z": [[(0, 6), (4, 6), (0, 0), (4, 0)]],
-    "0": [[(1.25, 0), (0.5, 1), (0.5, 5), (1.25, 6), (2.75, 6), (3.5, 5), (3.5, 1), (2.75, 0), (1.25, 0)]],
-    "1": [[(1, 5), (2, 6), (2, 0)], [(1, 0), (3, 0)]],
-    "2": [[(0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (0, 0), (4, 0)]],
-    "3": [[(0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (3, 3), (1.5, 3)],
-          [(3, 3), (4, 2), (4, 1), (3, 0), (1, 0), (0, 1)]],
-    "4": [[(3, 0), (3, 6), (0, 2), (4, 2)]],
-    "5": [[(4, 6), (0, 6), (0, 3.5), (3, 3.5), (4, 2.5), (4, 1), (3, 0), (1, 0), (0, 1)]],
-    "6": [[(4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1), (4, 2.5), (3, 3.5), (0, 3.5)]],
-    "7": [[(0, 6), (4, 6), (1.5, 0)]],
-    "8": [[(1, 3), (0, 4), (0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (3, 3), (1, 3),
-           (0, 2), (0, 1), (1, 0), (3, 0), (4, 1), (4, 2), (3, 3)]],
-    "9": [[(0, 1), (1, 0), (3, 0), (4, 1), (4, 5), (3, 6), (1, 6), (0, 5), (0, 3.5), (1, 2.5), (4, 2.5)]],
-    ".": [_DOT],
-    ",": [[(2, 0.5), (1.5, -1)]],
-    "!": [[(2, 6), (2, 2)], _DOT],
-    "?": [[(0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (2, 2.5), (2, 1.5)], _DOT],
-    "-": [[(1, 3), (3, 3)]],
-    "+": [[(0.5, 3), (3.5, 3)], [(2, 1.5), (2, 4.5)]],
-    "'": [[(2, 6), (2, 4.5)]],
-    ":": [[(2, 1), (2, 1.4)], [(2, 4), (2, 4.4)]],
-    "/": [[(0, 0), (4, 6)]],
-    "♥": [[(2, 0), (0, 3), (0, 4.5), (1, 5.5), (2, 4.5), (3, 5.5), (4, 4.5), (4, 3), (2, 0)]],
-}
 
 
 class CreamTextError(Exception):
@@ -141,6 +101,56 @@ class Job:
     @property
     def cake_radius(self) -> float:
         return self.cake_diameter / 2
+
+
+@dataclass(frozen=True)
+class FontOptions:
+    spec: str
+    style: str = "fill"
+    weight: float | None = None
+    fallback: str = "auto"
+    allow_thin: bool = False
+
+
+class GlyphLike(Protocol):
+    strokes: list[Stroke]
+    advance: float
+    too_thin: bool
+    method: str
+    min_char_height: float | None
+
+
+class FontLike(Protocol):
+    """fontglyphs.OutlineFont 계약. 시험에서 가짜 폰트로 바꿔 끼움."""
+
+    def has_glyph(self, ch: str) -> bool: ...
+
+    def glyph_paths(self, ch: str, char_height: float, line_width: float, style: str = "fill",
+                    fallback: str = "auto") -> GlyphLike: ...
+
+
+FontFactory = Callable[[FontOptions], FontLike]
+
+
+@dataclass
+class TextLayout:
+    """확인한 문구 줄, 짤 글씨 획, 폰트 처리 결과. fallback은 폴백으로 그린 획 번호."""
+
+    lines: list[str]
+    strokes: list[Stroke]
+    fallback: set[int] = field(default_factory=set)
+    fallback_counts: dict[str, int] = field(default_factory=dict)
+    skipped: list[str] = field(default_factory=list)
+    char_height: float = 0.0
+    auto_height: bool = False
+    # 쓴 글자가 폴백 없이 채워지는 em 높이 중 최댓값. 모르면 None.
+    readable_height: float | None = None
+    # 폴백으로 그렸으나 그 높이를 모르는 글자.
+    unrated: list[str] = field(default_factory=list)
+
+    @property
+    def too_small(self) -> bool:
+        return self.readable_height is not None and self.char_height < self.readable_height
 
 
 # ---------- cfg 읽기 ----------
@@ -267,16 +277,18 @@ def load_machine(profile_dir: Path, center: Point | None = None) -> Machine:
 
 # ---------- 모양 ----------
 
-def validate_lines(lines: list[str]) -> list[str]:
-    result = [line.strip().upper() for line in lines]
+def validate_lines(lines: list[str], font: FontLike, font_name: str) -> list[str]:
+    result = [line.strip() for line in lines]
     if not any(result):
         raise CreamTextError("문구가 비어 있음")
     if sum(len(line) for line in result) > MAX_TEXT_CHARS:
         raise CreamTextError(f"문구가 {MAX_TEXT_CHARS}자 초과")
-    unsupported = sorted({ch for line in result for ch in line if ch not in GLYPHS})
+    # 공백 외 제어, 공백 문자는 막음. 줄바꿈이 gcode 주석 밖으로 새지 않게 함.
+    unsupported = sorted({ch for line in result for ch in line
+                          if ch != " " and not (ch.isprintable() and font.has_glyph(ch))})
     if unsupported:
         shown = ", ".join(repr(ch) for ch in unsupported)
-        raise CreamTextError(f"지원하지 않는 문자: {shown} (영문, 숫자, 기호 {''.join(sorted(GLYPHS)).strip()})")
+        raise CreamTextError(f"지원하지 않는 문자: {shown} (폰트 {font_name}에 없음)")
     return [line for line in result if line]
 
 
@@ -287,20 +299,6 @@ def _shift(strokes: list[Stroke], dx: float, dy: float) -> list[Stroke]:
 def _ink_mid(strokes: list[Stroke], index: int) -> float:
     values = [p[index] for stroke in strokes for p in stroke]
     return (min(values) + max(values)) / 2 if values else 0.0
-
-
-def text_strokes_unit(lines: list[str]) -> list[Stroke]:
-    """글자 높이 1로 배치함. 줄마다 가로, 전체를 세로로 획 기준 중심 정렬."""
-    strokes: list[Stroke] = []
-    for row, line in enumerate(lines):
-        y0 = -row * (GLYPH_HEIGHT + LINE_GAP)
-        row_strokes = [
-            [((col * (GLYPH_WIDTH + CHAR_GAP) + x) / GLYPH_HEIGHT, (y0 + y) / GLYPH_HEIGHT) for x, y in glyph]
-            for col, ch in enumerate(line)
-            for glyph in GLYPHS[ch]
-        ]
-        strokes += _shift(row_strokes, -_ink_mid(row_strokes, 0), 0.0)
-    return _shift(strokes, 0.0, -_ink_mid(strokes, 1))
 
 
 def max_radius(strokes: list[Stroke]) -> float:
@@ -317,22 +315,180 @@ def text_limit_radius(job: Job) -> float:
     return limit
 
 
-def scale_text(job: Job, unit: list[Stroke]) -> list[Stroke]:
-    reach = max_radius(unit)
-    room = text_limit_radius(job) - job.line_width / 2
-    fit = room / reach if reach > 0 else 0.0
-    min_height = MIN_CHAR_HEIGHT_PER_LINE_WIDTH * job.line_width
-    if job.char_height is None:
-        height = min(fit, AUTO_CHAR_HEIGHT_CAP)
-        if height < min_height:
-            raise CreamTextError(f"문구가 너무 김: 가능한 글자 높이 {fit:.1f} mm < 최소 {min_height:.1f} mm")
+def _text_room(job: Job) -> float:
+    """획 중심선이 닿을 수 있는 반경."""
+    return text_limit_radius(job) - job.line_width / 2
+
+
+def _min_char_height(job: Job) -> float:
+    return MIN_CHAR_HEIGHT_PER_LINE_WIDTH * job.line_width
+
+
+def _too_long(fit: float, job: Job) -> CreamTextError:
+    return CreamTextError(f"문구가 너무 김: 가능한 글자 높이 {fit:.1f} mm < 최소 {_min_char_height(job):.1f} mm")
+
+
+def _outside_cake(fit: float) -> CreamTextError:
+    return CreamTextError(f"글씨가 케이크 반경 밖: 글자 높이 최대 {max(fit, 0):.1f} mm")
+
+
+def _check_char_height(job: Job) -> None:
+    if job.char_height is not None and job.char_height < _min_char_height(job):
+        raise CreamTextError(f"글자 높이 {job.char_height:g} mm < 최소 {_min_char_height(job):.1f} mm(선 폭 기준)")
+
+
+@dataclass(frozen=True)
+class _Placed:
+    ch: str
+    glyph: GlyphLike
+    strokes: list[Stroke]
+
+
+def _all_strokes(placed: list[_Placed]) -> list[Stroke]:
+    return [s for p in placed for s in p.strokes]
+
+
+def _place_font(lines: list[str], font: FontLike, height: float, job: Job, opts: FontOptions) -> list[_Placed]:
+    """em 높이 height로 배치함. 글자 간격은 폰트 advance. 줄마다 가로, 전체를 세로로 획 기준 중심 정렬."""
+    placed: list[_Placed] = []
+    for row, line in enumerate(lines):
+        x, y0 = 0.0, -row * FONT_LINE_PITCH_EM * height
+        row_items = []
+        for ch in line:
+            glyph = font.glyph_paths(ch, height, job.line_width, opts.style, opts.fallback)
+            row_items.append(_Placed(ch, glyph, _shift(glyph.strokes, x, y0)))
+            x += glyph.advance
+        dx = -_ink_mid(_all_strokes(row_items), 0)
+        placed += [_Placed(p.ch, p.glyph, _shift(p.strokes, dx, 0.0)) for p in row_items]
+    dy = -_ink_mid(_all_strokes(placed), 1)
+    return [_Placed(p.ch, p.glyph, _shift(p.strokes, 0.0, dy)) for p in placed]
+
+
+def _ceil_tenth(value: float) -> float:
+    return math.ceil(value * 10 - 1e-9) / 10
+
+
+def _thin_error(thin: list[_Placed], height: float, max_height: float) -> CreamTextError:
+    needs = {p.ch: p.glyph.min_char_height for p in thin}
+    shown = ", ".join(f"{ch!r} {_ceil_tenth(need):g} mm 이상" if need else f"{ch!r} 해결 불가"
+                      for ch, need in needs.items())
+    msg = f"선 폭보다 가는 글자: {shown} (현재 글자 높이 {height:.1f} mm)"
+    if all(needs.values()):
+        need = _ceil_tenth(max(needs.values()))
+        if need <= max_height:
+            msg += f". --char-height {need:g} 제안"
+        else:
+            msg += f". 케이크 안 최대 글자 높이 {max_height:.1f} mm로 부족"
+    return CreamTextError(msg + ". 굵은 --weight, 좁은 --line-width, --allow-thin(건너뜀) 검토")
+
+
+def _font_layout(lines: list[str], placed: list[_Placed], opts: FontOptions, height: float,
+                 auto_height: bool) -> TextLayout:
+    layout = TextLayout(lines, [], char_height=height, auto_height=auto_height)
+    for p in placed:
+        if p.glyph.too_thin:
+            layout.skipped.append(p.ch)
+            continue
+        need = p.glyph.min_char_height
+        if need is not None:
+            layout.readable_height = max(need, layout.readable_height or 0.0)
+        is_fallback = p.glyph.method not in (opts.style, NO_STROKE_METHOD)
+        if is_fallback:
+            layout.fallback_counts[p.glyph.method] = layout.fallback_counts.get(p.glyph.method, 0) + 1
+            if need is None:
+                layout.unrated.append(p.ch)
+        for stroke in p.strokes:
+            if len(stroke) < 2:
+                continue
+            if is_fallback:
+                layout.fallback.add(len(layout.strokes))
+            layout.strokes.append(stroke)
+    return layout
+
+
+def font_text(job: Job, font: FontLike, opts: FontOptions) -> TextLayout:
+    """폰트 윤곽으로 글씨 획을 만듦. 크기, 범위는 실제 경로 좌표로 맞춤.
+
+    폰트 경로는 글자 높이에 비례하지 않으므로 자동 크기는 줄여 가며 다시 배치함.
+    """
+    lines = validate_lines(job.lines, font, opts.spec)
+    _check_char_height(job)
+    room = _text_room(job)
+    height = AUTO_CHAR_HEIGHT_CAP if job.char_height is None else job.char_height
+    for _ in range(FONT_FIT_TRIES):
+        placed = _place_font(lines, font, height, job, opts)
+        reach = max_radius(_all_strokes(placed))
+        if reach <= room:
+            break
+        fit = height * max(room, 0.0) / reach if reach > 0 else 0.0
+        if job.char_height is not None:
+            raise _outside_cake(fit)
+        if fit < _min_char_height(job):
+            raise _too_long(fit, job)
+        height = max(fit * FONT_FIT_SHRINK, _min_char_height(job))
     else:
-        height = job.char_height
-        if height < min_height:
-            raise CreamTextError(f"글자 높이 {height:g} mm < 최소 {min_height:.1f} mm(선 폭 기준)")
-        if height > fit:
-            raise CreamTextError(f"글씨가 케이크 반경 밖: 글자 높이 최대 {max(fit, 0):.1f} mm")
-    return [[(x * height, y * height) for x, y in stroke] for stroke in unit]
+        raise CreamTextError("글자 크기 맞춤 실패: --char-height 지정")
+    thin = [p for p in placed if p.glyph.too_thin]
+    if thin and not opts.allow_thin:
+        max_height = height * room / reach if reach > 0 else math.inf
+        raise _thin_error(thin, height, max_height)
+    return _font_layout(lines, placed, opts, height, job.char_height is None)
+
+
+def fallback_summary(counts: dict[str, int]) -> str:
+    methods = [m for m in FALLBACK_ORDER if m in counts] + sorted(set(counts) - set(FALLBACK_ORDER))
+    return "폴백: " + ", ".join(f"{m} {counts[m]}자" for m in methods)
+
+
+def small_text_warning(layout: TextLayout) -> str:
+    need = _ceil_tenth(layout.readable_height or 0.0)
+    return (f"경고: 글자가 작아 읽기 어려울 수 있음(글자 높이 {layout.char_height:.1f} mm < 권장 {need:g} mm).\n"
+            "    해결: 줄 나누기(문구를 인자로 분리), --margin, --border-inset, --flower-inset 줄이기, "
+            "--char-height 검토")
+
+
+def unrated_warning(layout: TextLayout) -> str:
+    shown = ", ".join(repr(ch) for ch in dict.fromkeys(layout.unrated))
+    return (f"경고: 폴백으로 그린 글자의 권장 높이 계산 불가: {shown}.\n"
+            "    해결: --preview로 확인, --char-height 키우기 또는 굵은 --weight 검토")
+
+
+@contextmanager
+def _as_cream_error(errors: tuple[type[Exception], ...]) -> Iterator[None]:
+    try:
+        yield
+    except errors as exc:
+        raise CreamTextError(str(exc)) from exc
+
+
+class _CheckedFont:
+    """폰트 모듈의 사용자 오류를 CreamTextError로 바꿈."""
+
+    def __init__(self, font: FontLike, errors: tuple[type[Exception], ...]) -> None:
+        self._font = font
+        self._errors = errors
+
+    def has_glyph(self, ch: str) -> bool:
+        with _as_cream_error(self._errors):
+            return self._font.has_glyph(ch)
+
+    def glyph_paths(self, ch: str, char_height: float, line_width: float, style: str = "fill",
+                    fallback: str = "auto") -> GlyphLike:
+        with _as_cream_error(self._errors):
+            return self._font.glyph_paths(ch, char_height, line_width, style, fallback)
+
+
+def open_font(opts: FontOptions) -> FontLike:
+    """의존 모듈은 실행 시점에 불러옴. 모듈 import만으로는 의존이 필요 없게 함."""
+    try:
+        import fontglyphs
+        import fontsrc
+    except ImportError as exc:
+        raise CreamTextError(f"폰트 처리에 필요한 모듈 없음({exc.name}). {VENV_HINT}") from exc
+    errors = (fontsrc.FontError, fontglyphs.FontGlyphError)
+    with _as_cream_error(errors):
+        font = fontglyphs.OutlineFont(fontsrc.resolve_font(opts.spec), opts.weight)
+    return _CheckedFont(font, errors)
 
 
 def border_stroke(job: Job) -> Stroke:
@@ -458,21 +614,24 @@ def check_job(machine: Machine, job: Job) -> None:
         raise CreamTextError("flowers, flower_ml 값 오류")
 
 
-def build_gcode(machine: Machine, job: Job) -> tuple[str, dict[int, float]]:
+def _ascii_comment(text: str) -> str:
+    """Klipper, Mainsail이 gcode를 ASCII로 가정할 수 있어 비ASCII는 \\uXXXX로 씀."""
+    return text.encode("ascii", "backslashreplace").decode("ascii")
+
+
+def build_gcode(machine: Machine, job: Job, layout: TextLayout) -> tuple[str, dict[int, float]]:
     """gcode와 카트리지별 짜는 크림 부피(mL, PRIME 제외)를 반환함."""
     check_job(machine, job)
-    lines = validate_lines(job.lines)
-    text = scale_text(job, text_strokes_unit(lines))
     write_z = job.height + job.gap
     travel_z = write_z + job.lift
 
     w = GcodeWriter(machine)
-    w.emit(f"; printc cream_text: {' / '.join(lines)}")
+    w.emit(f"; printc cream_text: {_ascii_comment(' / '.join(layout.lines))}")
     w.emit("G28")
     w.emit("G90")
     w.emit("M83")
     w.set_tool(TEXT_TOOL)
-    for stroke in text:
+    for stroke in layout.strokes:
         write_stroke(w, job, stroke, write_z, travel_z)
     if job.border:
         w.set_tool(BORDER_TOOL)
@@ -489,6 +648,41 @@ def build_gcode(machine: Machine, job: Job) -> tuple[str, dict[int, float]]:
     return w.text(), volumes
 
 
+# ---------- 미리 보기 ----------
+
+def _svg_points(stroke: Stroke) -> str:
+    # SVG는 y가 아래쪽 양수이므로 뒤집음.
+    return " ".join(f"{x:.2f},{-y:.2f}" for x, y in stroke)
+
+
+def preview_svg(job: Job, layout: TextLayout) -> str:
+    """짜는 경로를 케이크 중심 기준 SVG로 그림. 폴백 획은 색을 달리하고 이동은 점선."""
+    paths = [("fallback" if i in layout.fallback else "text", s) for i, s in enumerate(layout.strokes)]
+    if job.border:
+        paths.append(("border", border_stroke(job)))
+    dots = flower_points(job) if job.flowers else []
+    order = [s for _, s in paths] + [[p] for p in dots]
+    travel = " ".join(f"M{a[-1][0]:.2f},{-a[-1][1]:.2f} L{b[0][0]:.2f},{-b[0][1]:.2f}"
+                      for a, b in zip(order, order[1:]))
+    r = job.cake_radius
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{-r:g} {-r:g} {2 * r:g} {2 * r:g}" '
+        f'width="{2 * r:g}mm" height="{2 * r:g}mm">',
+        f'<circle r="{r:g}" fill="none" stroke="{SVG_COLORS["cake"]}" stroke-width="0.5"/>',
+        f'<g fill="none" stroke-width="{job.line_width:g}" stroke-linecap="round" stroke-linejoin="round" '
+        'opacity="0.8">',
+        *(f'<polyline stroke="{SVG_COLORS[kind]}" points="{_svg_points(s)}"/>' for kind, s in paths),
+        "</g>",
+        *(f'<circle cx="{x:.2f}" cy="{-y:.2f}" r="{job.line_width:g}" fill="{SVG_COLORS["flower"]}"/>'
+          for x, y in dots),
+    ]
+    if travel:
+        out.append(f'<path d="{travel}" fill="none" stroke="{SVG_COLORS["travel"]}" stroke-width="0.3" '
+                   'stroke-dasharray="1 1"/>')
+    out.append("</svg>")
+    return "\n".join(out) + "\n"
+
+
 # ---------- CLI ----------
 
 def resolve_inside(path: Path, root: Path, what: str) -> Path:
@@ -498,37 +692,48 @@ def resolve_inside(path: Path, root: Path, what: str) -> Path:
     return resolved
 
 
-def resolve_out(path: Path, root: Path) -> Path:
-    out = resolve_inside(path, root, "--out")
-    if out.suffix != ".gcode":
-        raise CreamTextError("--out 확장자는 .gcode")
+def resolve_output(path: Path, root: Path, flag: str, suffix: str) -> Path:
+    out = resolve_inside(path, root, flag)
+    if out.suffix != suffix:
+        raise CreamTextError(f"{flag} 확장자는 {suffix}")
     if out.is_dir():
-        raise CreamTextError(f"--out이 디렉터리: {out}")
+        raise CreamTextError(f"{flag}이 디렉터리: {out}")
     return out
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="문구를 생크림 레터링 gcode로 변환함. 인자 하나가 한 줄.")
-    p.add_argument("text", nargs="+", help="문구 줄(영문, 숫자, 기호)")
+    p.add_argument("text", nargs="+", help="문구 줄. 폰트에 있는 글자만")
     p.add_argument("--out", type=Path, required=True, help="출력 .gcode (저장소 안)")
-    p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE, help="프로필 디렉터리 (저장소 안)")
+    p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE,
+                   help="프로필 디렉터리 (저장소 안). 기본 %(default)s")
     p.add_argument("--cake-diameter", type=float, default=DEFAULT_CAKE_DIAMETER,
-                   help="케이크 지름 mm. 기본 3호")
+                   help="케이크 지름 mm. 기본 %(default)s(3호)")
     p.add_argument("--height", type=float, default=DEFAULT_CAKE_HEIGHT,
-                   help="케이크 높이 mm (판 윗면 기준). 기본 3호")
+                   help="케이크 높이 mm (판 윗면 기준). 기본 %(default)s(3호)")
     p.add_argument("--gap", type=float, help="케이크 윗면에서 깍지 끝까지 mm. 생략 시 _CREAM_CFG gap")
-    p.add_argument("--lift", type=float, default=5.0, help="획 사이 이동 시 추가 높이 mm")
-    p.add_argument("--char-height", type=float, help="글자 높이 mm. 생략 시 맞춤")
+    p.add_argument("--lift", type=float, default=5.0, help="획 사이 이동 시 추가 높이 mm. 기본 %(default)s")
+    p.add_argument("--char-height", type=float, help="글자 em 높이 mm. 생략 시 맞춤")
     p.add_argument("--line-width", type=float, help="크림 선 폭 mm. 생략 시 _CREAM_CFG line_width")
     p.add_argument("--line-height", type=float, help="크림 선 높이 mm. 생략 시 _CREAM_CFG line_height")
-    p.add_argument("--margin", type=float, default=10.0, help="케이크 가장자리에서 글씨까지 최소 거리 mm")
+    p.add_argument("--margin", type=float, default=10.0,
+                   help="케이크 가장자리에서 글씨까지 최소 거리 mm. 기본 %(default)s")
     p.add_argument("--border", action="store_true", help=f"T{BORDER_TOOL} 테두리 추가")
-    p.add_argument("--border-inset", type=float, default=8.0, help="가장자리에서 테두리까지 mm")
-    p.add_argument("--flowers", type=int, default=0, help=f"T{FLOWER_TOOL} 꽃 개수")
-    p.add_argument("--flower-inset", type=float, default=20.0, help="가장자리에서 꽃 중심까지 mm")
-    p.add_argument("--flower-ml", type=float, default=0.5, help="꽃 하나 크림 mL")
+    p.add_argument("--border-inset", type=float, default=8.0, help="가장자리에서 테두리까지 mm. 기본 %(default)s")
+    p.add_argument("--flowers", type=int, default=0, help=f"T{FLOWER_TOOL} 꽃 개수. 기본 %(default)s")
+    p.add_argument("--flower-inset", type=float, default=20.0, help="가장자리에서 꽃 중심까지 mm. 기본 %(default)s")
+    p.add_argument("--flower-ml", type=float, default=0.5, help="꽃 하나 크림 mL. 기본 %(default)s")
     p.add_argument("--center", type=float, nargs=2, metavar=("X", "Y"),
                    help="케이크 중심. 생략 시 _CREAM_CFG center_x, center_y")
+    p.add_argument("--font", help=f"폰트 패밀리 이름 또는 .ttf/.otf 경로. 기본 {DEFAULT_FONT}")
+    p.add_argument("--style", choices=FONT_STYLES, default=FONT_STYLES[0], help="채움 방식. 기본 %(default)s")
+    weight_help = ("생략 시 폰트 기본 굵기" if DEFAULT_WEIGHT is None
+                   else f"생략 시 기본 폰트는 {DEFAULT_WEIGHT:g}, 그 외는 폰트 기본 굵기")
+    p.add_argument("--weight", type=float, help=f"가변 폰트 굵기(wght). {weight_help}")
+    p.add_argument("--fallback", choices=FONT_FALLBACKS, default=FONT_FALLBACKS[0],
+                   help="가는 획 처리. 기본 %(default)s")
+    p.add_argument("--allow-thin", action="store_true", help="폴백으로도 못 그리는 글자를 건너뜀")
+    p.add_argument("--preview", type=Path, help="경로 미리 보기 .svg (저장소 안)")
     return p.parse_args(argv)
 
 
@@ -536,29 +741,63 @@ def _or(value: float | None, default: float) -> float:
     return default if value is None else value
 
 
-def main(argv: list[str] | None = None, root: Path = REPO_ROOT) -> int:
+def font_options(args: argparse.Namespace) -> FontOptions:
+    """DEFAULT_WEIGHT는 기본 폰트에만 적용. 다른 폰트는 --weight 생략 시 폰트 기본 굵기."""
+    weight = args.weight
+    if weight is None and args.font is None:
+        weight = DEFAULT_WEIGHT
+    return FontOptions(spec=args.font or DEFAULT_FONT, style=args.style, weight=weight,
+                       fallback=args.fallback, allow_thin=args.allow_thin)
+
+
+def _generate(args: argparse.Namespace, root: Path, font_factory: FontFactory) -> tuple[Path, str, TextLayout]:
+    profile = resolve_inside(args.profile, root, "--profile")
+    out = resolve_output(args.out, root, "--out", ".gcode")
+    preview = resolve_output(args.preview, root, "--preview", ".svg") if args.preview else None
+    opts = font_options(args)
+    machine = load_machine(profile, tuple(args.center) if args.center else None)
+    job = Job(
+        lines=args.text, cake_diameter=args.cake_diameter, height=args.height,
+        gap=_or(args.gap, machine.gap), lift=args.lift, char_height=args.char_height,
+        line_width=_or(args.line_width, machine.line_width),
+        line_height=_or(args.line_height, machine.line_height), margin=args.margin, border=args.border,
+        border_inset=args.border_inset, flowers=args.flowers, flower_inset=args.flower_inset,
+        flower_ml=args.flower_ml,
+    )
+    # 폰트를 열기(내려받기) 전에 작업 값 오류를 알림. build_gcode는 단독 호출 대비로 다시 확인함.
+    check_job(machine, job)
+    layout = font_text(job, font_factory(opts), opts)
+    gcode, volumes = build_gcode(machine, job, layout)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(gcode, encoding="utf-8")
+    if preview:
+        preview.parent.mkdir(parents=True, exist_ok=True)
+        preview.write_text(preview_svg(job, layout), encoding="utf-8")
+    summary = ", ".join(f"T{t} {v:.1f} mL" for t, v in sorted(volumes.items()))
+    message = f"생성: {out.relative_to(root)} (짜는 크림 {summary}, PRIME 제외)"
+    message += f"\n글자 높이 {layout.char_height:.1f} mm({'자동' if layout.auto_height else '지정'})"
+    if preview:
+        message += f"\n미리 보기: {preview.relative_to(root)}"
+    return out, message, layout
+
+
+def main(argv: list[str] | None = None, root: Path = REPO_ROOT, font_factory: FontFactory = open_font) -> int:
     args = parse_args(argv)
-    root = root.resolve()
     try:
-        profile = resolve_inside(args.profile, root, "--profile")
-        out = resolve_out(args.out, root)
-        machine = load_machine(profile, tuple(args.center) if args.center else None)
-        job = Job(
-            lines=args.text, cake_diameter=args.cake_diameter, height=args.height,
-            gap=_or(args.gap, machine.gap), lift=args.lift, char_height=args.char_height,
-            line_width=_or(args.line_width, machine.line_width),
-            line_height=_or(args.line_height, machine.line_height), margin=args.margin, border=args.border,
-            border_inset=args.border_inset, flowers=args.flowers, flower_inset=args.flower_inset,
-            flower_ml=args.flower_ml,
-        )
-        gcode, volumes = build_gcode(machine, job)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(gcode, encoding="utf-8")
+        _, message, layout = _generate(args, root.resolve(), font_factory)
     except (CreamTextError, OSError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
-    summary = ", ".join(f"T{t} {v:.1f} mL" for t, v in sorted(volumes.items()))
-    print(f"생성: {out.relative_to(root)} (짜는 크림 {summary}, PRIME 제외)")
+    print(message)
+    if layout.fallback_counts:
+        print(fallback_summary(layout.fallback_counts))
+    if layout.skipped:
+        shown = ", ".join(repr(ch) for ch in dict.fromkeys(layout.skipped))
+        print(f"경고: 선 폭보다 가는 글자 건너뜀: {shown}", file=sys.stderr)
+    if layout.too_small:
+        print(small_text_warning(layout), file=sys.stderr)
+    if layout.unrated:
+        print(unrated_warning(layout), file=sys.stderr)
     return 0
 
 
