@@ -44,10 +44,12 @@ Klipper 없는 호스트는 `@sim/docker.sh`가 컨테이너에서 1–3 수행(
 
 ## 기준 시간
 
-3호 케이크 316초(이 프로필 모의 실행값).
+3호 케이크 327초(이 프로필 모의 실행값). 작업 생성, 모의 실행 순.
 
-- 작업: `python3 tools/cream_text.py HAPPY BIRTHDAY --out out/job.gcode --border --flowers 8`.
-- 실행: `sim/docker.sh out/job.gcode`.
+```
+.venv/bin/python tools/cream_text.py HAPPY BIRTHDAY --out out/job.gcode --border --flowers 8
+sim/docker.sh out/job.gcode
+```
 
 ## 검증 필요
 

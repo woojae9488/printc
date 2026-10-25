@@ -15,7 +15,13 @@ paths:
 모의 실행만 수행.
 
 1. `@tools/cream_text.py`로 시험 문구 gcode를 `out/job.gcode`에 생성.
-    - 인자는 `python3 tools/cream_text.py -h`.
+    - 실행:
+
+        ```
+        .venv/bin/python tools/cream_text.py HAPPY BIRTHDAY --out out/job.gcode --border --flowers 8
+        ```
+
+    - 인자는 `-h`, 설치는 `@docs/lettering.md`.
 2. `sim/docker.sh out/job.gcode [프로필]` 실행. 사용법은 `sim/docker.sh -h`.
     - Klipper 설치 호스트는 `KLIPPER_DIR=<klipper 경로> sim/run.sh`로 직접 실행 가능.
 3. 종료 코드(0 성공, 1 모의 실행 오류, 2 인자·환경)와 출력(예상 시간 차이, 실패 시 로그 요약) 보고.
