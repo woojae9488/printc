@@ -1,6 +1,6 @@
 ---
 name: hw-profile
-description: 하드웨어 교체(보드, 모터, 주사기, 프레임) 또는 보정값 반영 시 hardware/ 프로필 생성, 수정.
+description: hardware/ 프로필 생성, 수정. 보드, 모터, 주사기, 프레임 교체나 보정값 반영 시 사용.
 paths:
   - hardware/**
   - docs/**
