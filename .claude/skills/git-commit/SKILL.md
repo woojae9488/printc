@@ -15,7 +15,7 @@ description: 변경 사항을 컨벤션에 맞게 커밋. 커밋 요청 시 사�
 6. 메시지 작성: `<type>: <요약>`. 금지 사항은 `@.claude/rules/git.md`.
     - type: `feat`, `fix`, `docs`, `refactor`, `chore`, `hw`(프로필, 보정값)
     - 요약은 50자 이내, 단순 종결형, 마침표 없음.
-    - 이유가 필요하면 본문에 1~2줄.
+    - 이유가 필요하면 본문에 1–2줄.
 7. 커밋 후 `git log -1`로 확인.
 
 `--no-verify`, `--amend`, 강제 푸시 금지.
