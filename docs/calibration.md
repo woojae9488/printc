@@ -4,10 +4,8 @@
 
 - 순서: 이동 거리 → 빔 수평 → Z 영점 → 컵, 교체 자리 → 크림 양 → 장전 거리 → 첫 획.
 - 기호: `cfg` = `@hardware/active/printer.cfg`, `vars` = `@hardware/active/cream_vars.cfg`.
-- 값을 바꿀 때마다 저장 후 `RESTART`.
-    - Pi는 저장소 링크를 읽으므로 Mainsail에서 고친 값이 저장소에 바로 반영됨.
-    - 배포 방식은 `@hardware/active/NOTES.md`.
-- 반영과 기록은 `/hw-profile` 보정 절차로 수행.
+- 값을 바꿀 때마다 로컬 저장소 파일을 고치고 `@deploy/sync.sh`로 반영. `@docs/deploy.md` 설정 반영.
+- 파일 수정과 기록은 `/hw-profile` 보정 절차, Pi 반영은 `/printer-deploy`로 수행.
 
 ## 이동 거리
 

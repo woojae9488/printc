@@ -5,5 +5,5 @@
 ## 문서
 
 - 프로필 구성: `@hardware/README.md`
-- 첫 전원, 보정, 문제 해결: `@docs/`
+- 배포, 첫 전원, 보정, 문제 해결: `@docs/`
 - 작업 규칙: `@.claude/rules/`

@@ -9,10 +9,7 @@ MKS Gen L 프로필의 부품, 펌웨어 빌드, 보정 기록, 검증 필요 �
 - 드라이버: DRV8825 5개 (1/32, 점퍼 3개). 전류 = Vref × 2.
 - 피스톤: SL 모터 + T8 로드 일체(리드 8 mm), E1 단자, 주사기 60 mL 안지름 26.7 mm.
 - 펌웨어: 아래 펌웨어 빌드.
-- 배포: Pi `~/printer_data/config/`에 저장소를 링크.
-    - `printer.cfg`는 `[include <링크>/hardware/active/printer.cfg]` 한 줄.
-    - 파일 단위 복사, 링크 금지(`cream.cfg` include 상대 경로가 깨짐).
-    - `[pause_resume]` 사용, Mainsail `mainsail.cfg` include 금지(`RESUME`, `CANCEL_PRINT` 충돌).
+- 배포: `@docs/deploy.md` 설정 반영.
 
 ## 펌웨어 빌드
 
@@ -25,7 +22,8 @@ Klipper 없는 호스트는 `@sim/docker.sh`가 컨테이너에서 1–3 수행(
 3. `make clean && make`. `out/klipper.dict` 생성.
 4. 모의 실행은 `KLIPPER_DICT` 기본 경로 `$KLIPPER_DIR/out/klipper.dict`를 읽음.
     - 다른 위치면 `KLIPPER_DICT=<경로>` 지정.
-5. 실기 올리기: `sudo service klipper stop` 후 `make flash FLASH_DEVICE=<[mcu] serial>`.
+5. 실기 올리기: `@docs/deploy.md` MCU 펌웨어. 수동 시 아래.
+    - `sudo service klipper stop` 후 `make flash FLASH_DEVICE=<[mcu] serial>`.
     - 끝에 `avrdude done`이 나오면 성공. 이후 `sudo service klipper start`.
     - 실패 시 `@docs/troubleshooting.md`.
 
