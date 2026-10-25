@@ -9,7 +9,7 @@
 
 ## 드라이버 주의
 
-- 24V가 켜진 상태에서 모터 커넥터를 뽑거나 꽂지 않음. 드라이버가 파손됨.
+- 24 V가 켜진 상태에서 모터 커넥터를 뽑거나 꽂지 않음. 드라이버가 파손됨.
 - 드라이버마다 방열판을 붙이고 박스 팬(`[controller_fan box]`)이 도는지 확인.
 - 마이크로스텝은 점퍼로 정함.
     - 점퍼 설정과 `@hardware/active/printer.cfg`의 각 `[stepper_*] microsteps`가 같아야 함.
@@ -40,10 +40,7 @@
     - `STEPPER_BUZZ STEPPER=stepper_z`: 갠트리가 위로
     - `STEPPER_BUZZ STEPPER=stepper_z1`: 오른쪽 스크루가 `stepper_z`와 같은 방향(위로)
     - `STEPPER_BUZZ STEPPER=extruder`: 밀대가 아래로
-    - Z 두 모터를 한 드라이버에 병렬로 쓰는 구성이면 `stepper_z1`이 없음.
-        - 구성은 `@hardware/active/NOTES.md`.
-        - 한쪽만 반대면 전원을 끄고 그 모터의 코일 한 쌍만 뒤집음.
-    - Z 분리 구성에서 `stepper_z`, `stepper_z1` 단독 버즈는 한쪽 스크루만 돌려 갠트리를 비틂.
+    - `stepper_z`, `stepper_z1` 단독 버즈는 한쪽 스크루만 돌려 갠트리를 비틂.
         - 반복 실행 금지, 끝난 뒤 빔 수평 확인.
 6. 드라이버 응답
     - `SET_STEPPER_ENABLE STEPPER=<섹션 이름> ENABLE=1`로 모든 모터를 켠 채 1분 둔 뒤 방열판을 만짐.

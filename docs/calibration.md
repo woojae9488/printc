@@ -14,11 +14,11 @@
 1. `G28` 후 헤드(또는 판)에 표시하고 지시 거리 D만큼 이동. 강철자로 실제 거리 측정.
 2. 허용 ±0.3 mm. 벗어나면 다음으로 고침.
 
-| 축  | 측정                             | 항목                                                    |
-|-----|----------------------------------|---------------------------------------------------------|
-| X   | `G1 X<D>`                        | `cfg` `[stepper_x] rotation_distance`                   |
-| Y   | `G1 Y<D>`                        | `cfg` `[stepper_y] rotation_distance`                   |
-| Z   | 두 Z 높이 사이 판 아랫변 높이 차 | `cfg` `[stepper_z]`, `[stepper_z1]` `rotation_distance` |
+| 축 | 측정                   | 항목                                                      |
+|---|----------------------|---------------------------------------------------------|
+| X | `G1 X<D>`            | `cfg` `[stepper_x] rotation_distance`                   |
+| Y | `G1 Y<D>`            | `cfg` `[stepper_y] rotation_distance`                   |
+| Z | 두 Z 높이 사이 판 아랫변 높이 차 | `cfg` `[stepper_z]`, `[stepper_z1]` `rotation_distance` |
 
 ```
 rotation_distance_new = rotation_distance_old × 지시 ÷ 실제
@@ -60,7 +60,7 @@ position_max = position_endstop_new
 ## 교체 자리
 
 1. 빈 카트리지를 끼운 채 `T1`.
-2. 주사기를 앞으로 끝까지 당겨 빼도 판, 틀에 닿지 않고 손이 들어가야 함.
+2. 카트리지를 앞으로 끝까지 당겨 빼도 판, 틀에 닿지 않고 손이 들어가야 함.
 3. 불편하면 `vars` `variable_swap_x`, `variable_swap_y`, `variable_swap_z` 조정.
 
 교체 높이 규칙.
@@ -98,11 +98,11 @@ load_mm_new = load_mm_old + 부족한 거리
 
 시험판에 `@tools/cream_text.py`로 만든 문구를 짜며 조정.
 
-| 증상             | 조정                                            |
-|------------------|-------------------------------------------------|
-| 줄이 뜸          | Mainsail Z offset −0.2씩                        |
-| 줄이 눌림        | Mainsail Z offset +0.2씩                        |
-| 줄이 가늚        | Extrusion factor 5 %씩 올림                     |
+| 증상         | 조정                                           |
+|------------|----------------------------------------------|
+| 줄이 뜸       | Mainsail Z offset −0.2씩                      |
+| 줄이 눌림      | Mainsail Z offset +0.2씩                      |
+| 줄이 가늚      | Extrusion factor 5 %씩 올림                     |
 | 획 시작, 끝 뭉침 | `cfg` `[extruder] pressure_advance` 0.05씩 올림 |
 
 - 획 시작, 끝 뭉침은 뭉침이 줄어드는 값을 선택.
