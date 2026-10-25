@@ -17,6 +17,7 @@ MKS Gen L 프로필의 부품, 펌웨어 빌드, 보정 기록, 검증 필요 �
 ## 펌웨어 빌드
 
 Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/run.sh` 모의 실행에도 씀.
+Klipper 없는 호스트는 `@sim/docker.sh`가 컨테이너에서 1–3 수행(menuconfig 확인, `make clean` 제외).
 
 1. `@hardware/mks-gen-l/firmware.config`를 Klipper 소스의 `.config`로 복사.
 2. `make olddefconfig`.
@@ -45,11 +46,13 @@ Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/
 
 ## 기준 시간
 
-3호 케이크 498초(임시값).
+3호 케이크 316초(이 프로필 모의 실행값).
+
+- 작업: `python3 tools/cream_text.py HAPPY BIRTHDAY --out out/job.gcode --border --flowers 8`.
+- 실행: `sim/docker.sh out/job.gcode`.
 
 ## 검증 필요
 
-- 기준 시간: 다른 보드 기준 임시값. 이 프로필로 모의 실행해 갱신.
 - `serial`: 보드마다 `ls /dev/serial/by-id/`로 확인.
 - `[extruder]` 핀(E1: `PC1`, `PC3`, `!PC7`): RAMPS 예제 기억 기준. 미검증.
 - `[stepper_z1]` Vref 0.30: 추정.
@@ -69,6 +72,3 @@ Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/
     - 단자 재배정 때 `!`는 핀과 함께 옮김.
     - E0 핀은 피스톤에 쓰던 값을 옮김. E0 `dir_pin`의 `!`는 피스톤 기준이라 Z 방향과 무관.
     - E1 핀 극성은 추정.
-- `firmware.config` 항목 이름: `make menuconfig` 화면과 대조.
-    - `make olddefconfig` 후 `.config`에 값이 그대로 남는지 확인.
-- Pi 밖에서 빌드 시 AVR 빌드 도구(avr-gcc 등) 별도 설치 필요 여부: 미확인.
