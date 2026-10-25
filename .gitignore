@@ -1,0 +1,24 @@
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 생성물
+out/
+*.gcode
+*.serial
+*.log
+
+# 비밀 값
+.env
+*.key
