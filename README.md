@@ -10,9 +10,9 @@
 
 ## 구조
 
-디렉터리 구성은 `CLAUDE.md` 참조.
+디렉터리 구성: `@CLAUDE.md`
 
 ## 문서
 
-- 프로필 구성: `hardware/README.md`
-- 작업 규칙: `.claude/rules/`
+- 프로필 구성: `@hardware/README.md`
+- 작업 규칙: `@.claude/rules/`

@@ -8,13 +8,13 @@ paths:
 
 # skill-guide
 
-컨벤션은 `.claude/rules/`를 따름.
+컨벤션은 `@.claude/rules/`를 따름.
 
 ## 생성
 
 1. 기본 스킬로 대체 가능한지 확인. 가능하면 중단하고 보고.
 2. 요청 범위 확정. 불명확하면 질문.
-3. `.claude/skills/<name>/SKILL.md` 작성.
+3. `@.claude/skills/<name>/SKILL.md` 작성.
 
 ## 점검
 
@@ -23,5 +23,5 @@ paths:
 
 ## 규칙 추가
 
-- 항상 적용: `.claude/rules/<주제>.md`.
+- 항상 적용: `@.claude/rules/<주제>.md`.
 - 특정 경로만: frontmatter `paths`에 글롭 지정.
