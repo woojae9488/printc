@@ -5,6 +5,7 @@ paths:
   - tools/**
   - sim/**
   - docs/**
+  - deploy/**
 ---
 
 # 하드웨어 분리
