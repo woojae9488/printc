@@ -5,7 +5,7 @@
 - 보드: MKS Gen L v1.0 (ATmega2560, 16MHz), USB로 Pi Zero 2 WH 직결.
     - CH340이라 `usb-1a86_USB_Serial...`로 보이고 인식은 `dmesg | grep ch341`.
 - 드라이버: DRV8825 x5 (1/32, 점퍼 3개). 전류 = Vref × 2
-- 피스톤: SL 모터 + T8 로드 일체(리드 8), E0 단자, 주사기 60 mL 안지름 26.7
+- 피스톤: SL 모터 + T8 로드 일체(리드 8), E1 단자, 주사기 60 mL 안지름 26.7
 - 펌웨어: 아래 펌웨어 빌드.
 - 배포: Pi `~/printer_data/config/`에 저장소를 링크.
     - `printer.cfg`는 `[include <링크>/hardware/active/printer.cfg]` 한 줄.
@@ -28,24 +28,27 @@ Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/
 
 ## 모터 단자, Vref (V)
 
-| 단자 | 모터                    | Vref |
-|------|-------------------------|------|
-| X    | X                       | 0.40 |
-| Y    | Y                       | 0.50 |
-| Z    | Z 왼쪽                  | 0.30 |
-| E1   | Z 오른쪽 (`stepper_z1`) | 0.30 |
-| E0   | 피스톤                  | 0.50 |
+| 단자 | 모터                   | Vref |
+|----|----------------------|------|
+| X  | X                    | 0.40 |
+| Y  | Y                    | 0.50 |
+| Z  | Z 왼쪽                 | 0.30 |
+| E0 | Z 오른쪽 (`stepper_z1`) | 0.30 |
+| E1 | 피스톤                  | 0.50 |
+
+- 가이드 배선과 단자가 다름(가이드는 피스톤이 E0).
+    - Z 두 모터에 검증된 핀(Z, E0의 step, enable)을 쓰고, 검증 안 된 E1은 피스톤에 둠.
 
 병렬 대안.
 
 - Z 두 모터를 Z 단자에 병렬, Vref 0.60, `[stepper_z1]` 삭제.
+- 피스톤은 E0 단자로 옮기고 `[extruder]`에 E0 핀 사용.
 - 드라이버 4개로 충분.
-- 분리, 병렬 중 사용자 결정 필요.
 
 ## 보정 기록
 
-| 날짜 | 항목 | 전  | 후  |
-|------|------|-----|-----|
+| 날짜 | 항목 | 전 | 후 |
+|----|----|---|---|
 
 ## 기준 시간
 
@@ -55,8 +58,8 @@ Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/
 
 - 기준 시간 498초: SKR 기준 값. 이 프로필(MKS Gen L)로 모의 실행해 갱신.
 - `serial`: 보드마다 `ls /dev/serial/by-id/`로 확인.
-- `[stepper_z1]` 핀(E1: PC1, PC3, !PC7), `dir_pin`, Vref 0.30: 가이드에 없음.
-    - 드라이버 5번째 추가 구매 필요.
+- `[extruder]` 핀(E1: PC1, PC3, !PC7): 가이드에 없음. RAMPS 예제 기억 기준.
+- `[stepper_z1]` Vref 0.30: 가이드에 없음(가이드는 Z 병렬 0.60).
 - 가이드에 없음.
     - `printer.cfg`: `max_z_velocity`, `max_z_accel`, `homing_speed`, `nozzle_diameter`.
     - `cream_vars.cfg`: `variable_travel_speed`, `variable_print_speed`.
@@ -70,6 +73,9 @@ Klipper 소스 디렉터리에서 수행. 생성된 `out/klipper.dict`는 `@sim/
     - 가이드 '줄 굵기 2.5 mm', '깍지 끝은 케이크 윗면 1 mm 위'와 대조.
 - Z 3200 step/mm 급 AVR 스텝 속도: 모의 실행에서 `Timer too close` 확인.
 - 모든 `dir_pin`의 `!`: 첫 전원 방향 시험에서 확정.
+    - 단자 재배정 때 `!`는 핀과 함께 옮김.
+    - E0의 step, enable 핀만 가이드 값. E0 `dir_pin`의 `!`는 가이드의 피스톤 기준이라 Z 방향과 무관.
+    - E1 핀 극성은 추정.
 - `firmware.config` 항목 이름: `make menuconfig` 화면과 대조.
     - `make olddefconfig` 후 `.config`에 값이 그대로 남는지 확인.
 - Pi 밖에서 빌드 시 AVR 빌드 도구(avr-gcc 등) 별도 설치 필요 여부.
