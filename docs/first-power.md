@@ -38,7 +38,7 @@
     - `STEPPER_BUZZ STEPPER=stepper_x`: 헤드가 오른쪽(+X)
     - `STEPPER_BUZZ STEPPER=stepper_y`: 판이 앞(사람 쪽)
     - `STEPPER_BUZZ STEPPER=stepper_z`: 갠트리가 위로
-    - `STEPPER_BUZZ STEPPER=stepper_z1`: 갠트리가 위로, 양쪽 스크루 같은 방향
+    - `STEPPER_BUZZ STEPPER=stepper_z1`: 오른쪽 스크루가 `stepper_z`와 같은 방향(위로)
     - `STEPPER_BUZZ STEPPER=extruder`: 밀대가 아래로
     - Z 두 모터를 한 드라이버에 병렬로 쓰는 구성이면 `stepper_z1`이 없음.
         - 구성은 `@hardware/active/NOTES.md`.
