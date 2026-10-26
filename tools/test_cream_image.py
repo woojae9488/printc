@@ -10,6 +10,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -24,9 +25,10 @@ except ImportError as exc:
     raise unittest.SkipTest(f"이미지 의존 없음(tools/requirements.txt): {exc}")
 
 BLACK, RED, BLUE, YELLOW = (0, 0, 0), (220, 40, 60), (30, 60, 200), (250, 200, 30)
+Color = str | tuple[int, ...]
 
 
-def draw_png(path: Path, shapes: list[tuple[tuple[int, int, int, int], object]],
+def draw_png(path: Path, shapes: list[tuple[tuple[int, int, int, int], Color]],
              size: tuple[int, int] = (200, 200)) -> Path:
     img = Image.new("RGB", size, "white")
     draw = ImageDraw.Draw(img)
@@ -38,7 +40,11 @@ def draw_png(path: Path, shapes: list[tuple[tuple[int, int, int, int], object]],
 
 @dataclass(frozen=True)
 class FakeLayer:
-    hex: str
+    color: str
+
+    @property
+    def hex(self) -> str:
+        return self.color
 
 
 @dataclass(frozen=True)
@@ -48,8 +54,10 @@ class FakeRegion:
     side: float = 100.0
     reach: float = 80.0
     count: int = 1
-    layers: list[FakeLayer] = field(default_factory=lambda: [FakeLayer("#aa0000")])
+    layers: Sequence[ci.LayerLike] = field(default_factory=lambda: [FakeLayer("#aa0000")])
+    photo: bool = False
 
+    # noinspection PyUnusedLocal
     def parts(self, index: int, size: float) -> list[float]:
         return [size] * self.count
 
@@ -63,12 +71,12 @@ class FakeTraced:
     min_char_height: float | None = None
 
 
-def line_trace(part: float, ref: float, line_width: float, style: str, fallback: str) -> FakeTraced:
+def line_trace(part: float, *_: object) -> FakeTraced:
     """원점에서 +x로 part/2 만큼 가는 선 한 줄."""
     return FakeTraced([[(0.0, 0.0), (part / 2, 0.0)]])
 
 
-def fallback_trace(part: float, *_: object) -> FakeTraced:
+def fallback_trace(*_: object) -> FakeTraced:
     return FakeTraced([[(0.0, 0.0), (5.0, 0.0)]], method="center")
 
 
@@ -107,15 +115,17 @@ class ImageLayersTest(unittest.TestCase):
         def fail(*_: object) -> FakeTraced:
             raise AssertionError("윤곽이 밖이면 획을 만들지 않아야 함")
 
+        job = make_job(char_height=400)
         with self.assertRaisesRegex(ct.CreamTextError, "그림이 케이크 반경 밖"):
-            make_layers(make_job(char_height=400), trace=fail)
+            make_layers(job, trace=fail)
 
     def test_given_size_strokes_outside_room(self) -> None:
         def long_trace(part: float, *_: object) -> FakeTraced:
             return FakeTraced([[(0.0, 0.0), (part * 1.5, 0.0)]])
 
+        job = make_job(char_height=90)
         with self.assertRaisesRegex(ct.CreamTextError, "케이크 반경 밖"):
-            make_layers(make_job(char_height=90), trace=long_trace)
+            make_layers(job, trace=long_trace)
 
     def test_auto_shrinks_when_strokes_exceed_room(self) -> None:
         def long_trace(part: float, *_: object) -> FakeTraced:
@@ -126,11 +136,12 @@ class ImageLayersTest(unittest.TestCase):
         self.assertLessEqual(ct.max_radius(layer.layout.strokes), ct.text_room(job))
 
     def test_too_small(self) -> None:
+        job = make_job(char_height=10)
         with self.assertRaisesRegex(ct.CreamTextError, "최소"):
-            make_layers(make_job(char_height=10))
+            make_layers(job)
 
     def test_thin_parts_are_skipped(self) -> None:
-        def mixed(part: float, ref: float, lw: float, style: str, fb: str) -> FakeTraced:
+        def mixed(*_: object) -> FakeTraced:
             thin = next(calls)
             return FakeTraced([] if thin else [[(0.0, 0.0), (5.0, 0.0)]], too_thin=thin)
 
@@ -159,8 +170,9 @@ class ImageLayersTest(unittest.TestCase):
         self.assertEqual([layer.color for layer in layers], ["#0000bb"])
 
     def test_all_skipped(self) -> None:
+        job = make_job(char_height=60)
         with self.assertRaisesRegex(ct.CreamTextError, "짤 획이 없음"):
-            make_layers(make_job(char_height=60), trace=thin_trace)
+            make_layers(job, trace=thin_trace)
 
     def test_fallback_marked(self) -> None:
         (layer,) = make_layers(make_job(char_height=60), trace=fallback_trace)
@@ -172,7 +184,8 @@ class ImageLayersTest(unittest.TestCase):
 
 
 class CombineTest(unittest.TestCase):
-    def layers(self) -> list[ci.Layer]:
+    @staticmethod
+    def layers() -> list[ci.Layer]:
         return make_layers(make_job(char_height=60), TWO_COLORS, fallback_trace)
 
     def test_per_tool(self) -> None:

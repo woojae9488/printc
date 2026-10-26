@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     import numpy as np
+    import shapely
     from PIL import Image, ImageDraw
 
     import imageregion as ir
@@ -20,10 +21,11 @@ except ImportError as exc:
 
 RED, BLUE, YELLOW, BLACK = (220, 40, 60), (30, 60, 200), (250, 200, 30), (0, 0, 0)
 Box = tuple[int, int, int, int]
+Color = str | tuple[int, ...]
 
 
-def paint(path: Path, shapes: list[tuple[Box, object]], size: tuple[int, int] = (400, 400), mode: str = "RGB",
-          bg: object = "white") -> Path:
+def paint(path: Path, shapes: list[tuple[Box, Color]], size: tuple[int, int] = (400, 400), mode: str = "RGB",
+          bg: Color = "white") -> Path:
     """shapes는 (상자, 색). 상자는 끝점 포함."""
     img = Image.new(mode, size, bg)
     draw = ImageDraw.Draw(img)
@@ -33,6 +35,11 @@ def paint(path: Path, shapes: list[tuple[Box, object]], size: tuple[int, int] = 
     return path
 
 
+def two_boxes(directory: Path) -> Path:
+    # 빨강 200x200, 파랑 100x100. 서로 떨어져 있음.
+    return paint(directory / "a.png", [((20, 20, 219, 219), RED), ((260, 260, 359, 359), BLUE)])
+
+
 class TempDirTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -40,10 +47,6 @@ class TempDirTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
-
-    def two_boxes(self) -> Path:
-        # 빨강 200x200, 파랑 100x100. 서로 떨어져 있음.
-        return paint(self.dir / "a.png", [((20, 20, 219, 219), RED), ((260, 260, 359, 359), BLUE)])
 
 
 class MaskRegionTest(unittest.TestCase):
@@ -64,15 +67,15 @@ class MaskRegionTest(unittest.TestCase):
         mask[5:30, 5:30] = True
         mask[15:17, 15:17] = False  # 구멍 4px²
         mask[35, 35] = True  # 잡티
-        region = ir.mask_region(mask)
-        self.assertEqual(len(region.geoms), 1)
-        self.assertEqual(len(region.geoms[0].interiors), 0)
+        parts = shapely.get_parts(ir.mask_region(mask))
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(len(parts[0].interiors), 0)
 
     def test_keeps_big_hole(self) -> None:
         mask = np.zeros((40, 40), dtype=bool)
         mask[5:35, 5:35] = True
         mask[15:25, 15:25] = False
-        self.assertEqual(len(ir.mask_region(mask).geoms[0].interiors), 1)
+        self.assertEqual(len(shapely.get_parts(ir.mask_region(mask))[0].interiors), 1)
 
     def test_checkerboard_at_work_size_hits_limit(self) -> None:
         mask = np.indices((ir.WORK_MAX_PX, ir.WORK_MAX_PX)).sum(axis=0) % 2 == 0
@@ -88,7 +91,8 @@ class MaskRegionTest(unittest.TestCase):
 
 
 class QuantizeTest(unittest.TestCase):
-    def image(self) -> np.ndarray:
+    @staticmethod
+    def image() -> np.ndarray:
         rgb = np.full((100, 100, 3), 255, dtype=np.uint8)
         rgb[10:60, 10:60] = RED
         rgb[70:95, 70:95] = YELLOW
@@ -99,13 +103,13 @@ class QuantizeTest(unittest.TestCase):
         first = ir.kmeans_centers(pixels, 3)
         np.testing.assert_array_equal(first, ir.kmeans_centers(pixels, 3))
         for color in ((255, 255, 255), RED, YELLOW):
-            self.assertTrue(np.linalg.norm(first - color, axis=1).min() < 5)
+            self.assertLess(np.linalg.norm(first - color, axis=1).min(), 5)
 
     def test_rare_blend_color_is_not_a_seed(self) -> None:
         rgb = self.image()
         rgb[0, :20] = (235, 120, 50)  # 가장자리가 섞인 드문 색
         centers = ir.kmeans_centers(rgb.reshape(-1, 3), 3)
-        self.assertTrue(np.linalg.norm(centers - YELLOW, axis=1).min() < 5)
+        self.assertLess(np.linalg.norm(centers - YELLOW, axis=1).min(), 5)
 
     def test_background_is_color_touching_the_border(self) -> None:
         labels, background = ir.quantize(self.image(), 2, simplify=False, draw_background=False)
@@ -148,7 +152,7 @@ class QuantizeTest(unittest.TestCase):
 
 class LoadRegionsTest(TempDirTest):
     def test_layers_by_area_with_shared_center(self) -> None:
-        regions = ir.load_regions(self.two_boxes(), 2)
+        regions = ir.load_regions(two_boxes(self.dir), 2)
         self.assertEqual(len(regions.layers), 2)
         red, blue = regions.layers
         self.assertLess(np.linalg.norm(np.array(red.color) - RED), 10)
@@ -161,14 +165,14 @@ class LoadRegionsTest(TempDirTest):
         self.assertGreater(regions.reach, regions.side / 2)
 
     def test_hex(self) -> None:
-        layer = ir.load_regions(self.two_boxes(), 2).layers[0]
+        layer = ir.load_regions(two_boxes(self.dir), 2).layers[0]
         self.assertRegex(layer.hex, r"^#[0-9a-f]{6}$")
 
     def test_fewer_layers_than_colors(self) -> None:
-        self.assertEqual(len(ir.load_regions(self.two_boxes(), 6).layers), 2)
+        self.assertEqual(len(ir.load_regions(two_boxes(self.dir), 6).layers), 2)
 
     def test_draw_background(self) -> None:
-        layers = ir.load_regions(self.two_boxes(), 3, draw_background=True).layers
+        layers = ir.load_regions(two_boxes(self.dir), 3, draw_background=True).layers
         self.assertEqual(len(layers), 3)
 
     def test_dark_background_is_skipped_by_border(self) -> None:
@@ -192,9 +196,10 @@ class LoadRegionsTest(TempDirTest):
             ir.load_regions(path, 3)
 
     def test_color_count_range(self) -> None:
+        path = two_boxes(self.dir)
         for bad in (0, ir.MAX_COLORS + 1):
             with self.assertRaisesRegex(ir.ImageRegionError, "색 수"):
-                ir.load_regions(self.two_boxes(), bad)
+                ir.load_regions(path, bad)
 
     def test_small_image_is_enlarged(self) -> None:
         path = paint(self.dir / "small.png", [((8, 4, 31, 19), BLACK)], size=(40, 24))
@@ -228,9 +233,10 @@ class LoadRegionsTest(TempDirTest):
             ir.load_regions(path, 1)
 
     def test_rejects_huge_source(self) -> None:
+        path = two_boxes(self.dir)
         with mock.patch.object(ir, "MAX_SOURCE_PIXELS", 100):
             with self.assertRaisesRegex(ir.ImageRegionError, "너무 큼"):
-                ir.load_regions(self.two_boxes(), 2)
+                ir.load_regions(path, 2)
 
 
 def shaded(img: Image.Image, top: float = 0.55, bottom: float = 1.0) -> Image.Image:
@@ -339,7 +345,7 @@ class PhotoTest(TempDirTest):
 class PlainImageTest(TempDirTest):
     """사진이 아닌 일반 이미지는 자동 판정이 켜져도 사진 보정 없이 이전처럼 나와야 함."""
 
-    def icon(self, name: str, size: int = 300, shapes: list | None = None, bg: object = "white") -> Path:
+    def icon(self, name: str, size: int = 300, shapes: list | None = None, bg: Color = "white") -> Path:
         img = Image.new("RGB", (size, size), bg)
         draw = ImageDraw.Draw(img)
         for kind, box, color in shapes or []:
@@ -382,7 +388,7 @@ class PlainImageTest(TempDirTest):
 
 class PartsTest(TempDirTest):
     def test_all_layers_share_one_scale(self) -> None:
-        regions = ir.load_regions(self.two_boxes(), 2)
+        regions = ir.load_regions(two_boxes(self.dir), 2)
         parts = [p for i in range(2) for p in regions.parts(i, 120.0)]
         x0, y0, x1, y1 = (f(v) for f, v in zip((min, min, max, max), zip(*(p.bounds for p in parts))))
         self.assertAlmostEqual(max(x1 - x0, y1 - y0), 120.0)

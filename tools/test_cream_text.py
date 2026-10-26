@@ -269,43 +269,51 @@ class BuildTest(TempProfileTest):
         self.assertAlmostEqual((min(xs) + max(xs)) / 2, 160.0, places=1)
 
     def test_text_outside_cake(self) -> None:
+        job = make_job(lines=["HELLO"], char_height=60)
         with self.assertRaisesRegex(ct.CreamTextError, "반경 밖"):
-            build(self.machine, make_job(lines=["HELLO"], char_height=60))
+            build(self.machine, job)
 
     def test_char_height_invalid(self) -> None:
+        zero, tiny = make_job(char_height=0), make_job(char_height=1)
         with self.assertRaisesRegex(ct.CreamTextError, "char_height"):
-            ct.check_job(self.machine, make_job(char_height=0))
+            ct.check_job(self.machine, zero)
         with self.assertRaisesRegex(ct.CreamTextError, "최소"):
-            build(self.machine, make_job(char_height=1))
+            build(self.machine, tiny)
 
     def test_inset_beyond_radius(self) -> None:
+        flowers, border = make_job(flowers=4, flower_inset=120), make_job(border=True, border_inset=105)
         with self.assertRaisesRegex(ct.CreamTextError, "flower_inset .* 반경"):
-            ct.check_job(self.machine, make_job(flowers=4, flower_inset=120))
+            ct.check_job(self.machine, flowers)
         with self.assertRaisesRegex(ct.CreamTextError, "border_inset .* 반경"):
-            ct.check_job(self.machine, make_job(border=True, border_inset=105))
+            ct.check_job(self.machine, border)
 
     def test_too_long(self) -> None:
+        job = make_job(lines=["ABCDEFGHIJKLMNOPQRSTUVWXYZ0123"], cake_diameter=150)
         with self.assertRaisesRegex(ct.CreamTextError, "너무 김"):
-            build(self.machine, make_job(lines=["ABCDEFGHIJKLMNOPQRSTUVWXYZ0123"], cake_diameter=150))
+            build(self.machine, job)
 
     def test_height_out_of_range(self) -> None:
+        job = make_job(height=255)
         with self.assertRaisesRegex(ct.CreamTextError, "범위 초과: Z"):
-            build(self.machine, make_job(height=255))
+            build(self.machine, job)
 
     def test_cake_outside_axis(self) -> None:
         machine = ct.Machine(**{**self.machine.__dict__, "center": (10.0, 117.5)})
+        job = make_job(lines=["HI"])
         with self.assertRaisesRegex(ct.CreamTextError, "범위 초과: X"):
-            build(machine, make_job(lines=["HI"]))
+            build(machine, job)
 
     def test_tool_count(self) -> None:
         machine = ct.Machine(**{**self.machine.__dict__, "tool_count": 2})
+        job = make_job(flowers=8)
         with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T2 없음"):
-            build(machine, make_job(flowers=8))
+            build(machine, job)
 
     def test_cross_section(self) -> None:
         job = make_job(line_width=20, line_height=20)
+        layout = ct.TextLayout(job.lines, [])
         with self.assertRaisesRegex(ct.CreamTextError, "max_extrude_cross_section"):
-            ct.build_gcode(self.machine, job, ct.TextLayout(job.lines, []))
+            ct.build_gcode(self.machine, job, layout)
 
     def test_header_ascii(self) -> None:
         gcode, _ = build(self.machine, make_job(lines=["A생", "HI"], char_height=20))
@@ -336,8 +344,9 @@ class FontLayoutTest(TempProfileTest):
     def test_keeps_case_and_lines(self) -> None:
         layout = self.layout(lines=["e", "A"], char_height=20)
         self.assertEqual(layout.lines, ["e", "A"])
-        tops = sorted({round(s[0][1], 6) for s in layout.strokes})
-        self.assertAlmostEqual(tops[-1] - tops[0], ct.FONT_LINE_PITCH_EM * 20)
+        tops = sorted({float(f"{s[0][1]:.6f}") for s in layout.strokes})
+        pitch = tops[-1] - tops[0]
+        self.assertAlmostEqual(pitch, ct.FONT_LINE_PITCH_EM * 20)
 
     def test_auto_size_fits(self) -> None:
         job = make_job(lines=["AAAAAAAAAA"])
@@ -395,8 +404,9 @@ class FontLayoutTest(TempProfileTest):
             self.layout(lines=["Ai"], char_height=20)
         with self.assertRaisesRegex(ct.CreamTextError, "'x' 해결 불가"):
             self.layout(lines=["Ax"], char_height=20)
+        job = make_job(lines=["AAAAAAAi"], char_height=20, cake_diameter=150)
         with self.assertRaisesRegex(ct.CreamTextError, "케이크 안 최대"):
-            ct.font_text(make_job(lines=["AAAAAAAi"], char_height=20, cake_diameter=150), self.font, self.opts)
+            ct.font_text(job, self.font, self.opts)
         opts = ct.FontOptions(spec="fake", allow_thin=True)
         layout = ct.font_text(make_job(lines=["Ai"], char_height=20), self.font, opts)
         self.assertEqual((len(layout.strokes), layout.skipped), (2, ["i"]))
@@ -472,7 +482,7 @@ class CliTest(TempProfileTest):
                          ct.FontOptions(ct.DEFAULT_FONT, "outline", 500.0, "center", True))
 
     def test_other_font_weight(self) -> None:
-        self.assertEqual(self.options_seen("--font", "Other").weight, None)
+        self.assertIsNone(self.options_seen("--font", "Other").weight)
         self.assertEqual(self.options_seen("--font", "Other", "--weight", "300").weight, 300.0)
 
     def test_thin_cli(self) -> None:
@@ -595,8 +605,9 @@ class OutlineFontCliTest(TempProfileTest):
         with mock.patch.object(fontglyphs.OutlineFont, "glyph_paths", side_effect=bad), \
                 self.assertRaisesRegex(ct.CreamTextError, "bad glyph"):
             font.glyph_paths("H", 20, 4)
+        missing = ct.FontOptions(spec=str(self.root / "none.ttf"))
         with self.assertRaisesRegex(ct.CreamTextError, "폰트 파일 없음"):
-            ct.open_font(ct.FontOptions(spec=str(self.root / "none.ttf")))
+            ct.open_font(missing)
 
 
 @unittest.skipUnless(HAS_FONT_DEPS and SYSTEM_FONT.is_file(), "폰트 의존 또는 시스템 폰트 없음")
@@ -631,7 +642,8 @@ class ActiveProfileTest(unittest.TestCase):
 class LayoutToolsTest(TempProfileTest):
     """획마다 카트리지, 미리 보기 색을 줄 수 있음. 글씨는 기본값(T0, 기본 색)."""
 
-    def layout(self, **kw: object) -> ct.TextLayout:
+    @staticmethod
+    def layout(**kw: object) -> ct.TextLayout:
         strokes = [[(0.0, 0.0), (10.0, 0.0)], [(0.0, 5.0), (10.0, 5.0)], [(0.0, 10.0), (10.0, 10.0)]]
         return ct.TextLayout(["x"], strokes, **kw)
 
@@ -645,19 +657,22 @@ class LayoutToolsTest(TempProfileTest):
         self.assertEqual(sorted(volumes), [0, 2])
 
     def test_tool_beyond_count(self) -> None:
+        machine, job, layout = ct.load_machine(self.profile), make_job(), self.layout(tools=[0, 1, 3])
         with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T3 없음"):
-            ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(tools=[0, 1, 3]))
+            ct.build_gcode(machine, job, layout)
 
     def test_negative_tool(self) -> None:
+        machine, job, layout = ct.load_machine(self.profile), make_job(), self.layout(tools=[0, -1, 0])
         with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T-1 없음"):
-            ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(tools=[0, -1, 0]))
+            ct.build_gcode(machine, job, layout)
 
     def test_per_stroke_lists_must_match(self) -> None:
-        machine = ct.load_machine(self.profile)
+        machine, job = ct.load_machine(self.profile), make_job()
+        short_tools, short_colors = self.layout(tools=[0, 1]), self.layout(colors=["#111111"])
         with self.assertRaisesRegex(ct.CreamTextError, "tools 길이"):
-            ct.build_gcode(machine, make_job(), self.layout(tools=[0, 1]))
+            ct.build_gcode(machine, job, short_tools)
         with self.assertRaisesRegex(ct.CreamTextError, "colors 길이"):
-            ct.preview_svg(make_job(), self.layout(colors=["#111111"]))
+            ct.preview_svg(job, short_colors)
 
     def test_header_names_tool(self) -> None:
         gcode, _ = ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(), "cream_image")
@@ -679,10 +694,12 @@ class LayoutToolsTest(TempProfileTest):
     def test_nonfinite_job_values(self) -> None:
         machine = ct.load_machine(self.profile)
         for name in ("cake_diameter", "margin", "flower_ml"):
+            job = make_job(**{name: float("nan")})
             with self.assertRaisesRegex(ct.CreamTextError, "유한"):
-                ct.check_job(machine, make_job(**{name: float("nan")}))
+                ct.check_job(machine, job)
+        job = make_job(char_height=float("inf"))
         with self.assertRaisesRegex(ct.CreamTextError, "유한"):
-            ct.check_job(machine, make_job(char_height=float("inf")))
+            ct.check_job(machine, job)
 
 
 if __name__ == "__main__":
