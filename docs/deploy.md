@@ -16,7 +16,7 @@ Pi에 Klipper 호스트와 설정, MCU에 펌웨어를 올리는 절차.
 | 대상  | 올리는 것                        | 수단                |
 |-----|------------------------------|-------------------|
 | Pi  | Klipper, Moonraker, Mainsail | KIAUH(1회)         |
-| Pi  | 프로필, 매크로                     | `deploy/sync.sh`  |
+| Pi  | 프로필, 매크로, Moonraker 설정       | `deploy/sync.sh`  |
 | MCU | MCU 펌웨어                      | `deploy/flash.sh` |
 
 버전 일치.
@@ -24,6 +24,10 @@ Pi에 Klipper 호스트와 설정, MCU에 펌웨어를 올리는 절차.
 - Pi `PI_KLIPPER` 체크아웃은 `@sim/Dockerfile` `KLIPPER_REF`와 같게 둠.
     - 모의 실행과 실기가 같은 Klipper를 씀.
 - 호스트와 MCU 펌웨어의 명령 형식이 다르면 mcu 연결 오류가 날 수 있음. 검증 필요.
+- Mainsail 화면에서 Klipper 업데이트 금지. 체크아웃이 바뀜.
+    - Moonraker가 Klipper를 자동 등록하며 끄는 옵션은 없음(공식 문서).
+    - `[update_manager klipper] pinned_commit`은 커밋 해시가 필요함.
+        - `KLIPPER_REF`와 중복되므로 쓰지 않음.
 - `KLIPPER_REF` 변경 순서: `@sim/Dockerfile` 수정 → `/klipper-sim` → Pi 체크아웃 → MCU 펌웨어.
 
 ## Pi 최초 설치
@@ -72,6 +76,10 @@ Pi에 Klipper 호스트와 설정, MCU에 펌웨어를 올리는 절차.
 
 - `PI_CONFIG/printc`는 `PI_REPO`를 가리키는 링크.
 - `PI_CONFIG/printer.cfg`는 `[include printc/hardware/active/printer.cfg]` 한 줄.
+- `PI_CONFIG/moonraker.conf`는 `[include printc/klipper/moonraker.conf]` 한 줄.
+    - include 경로는 설정 파일이 있는 폴더 기준 상대 경로(Moonraker 공식 문서).
+        - 링크 디렉터리를 통과하는 동작은 공식 문서에 없음. 검증 필요.
+    - 신뢰 네트워크 범위 등 설정 내용은 `@klipper/moonraker.conf`.
 - 프로필 파일을 `PI_CONFIG`에 파일 단위로 복사, 링크하지 않음.
     - `cream.cfg` include 상대 경로가 깨짐.
 - `[pause_resume]`는 프로필에서 정의. Mainsail `mainsail.cfg` include 금지.
@@ -81,8 +89,11 @@ Pi에 Klipper 호스트와 설정, MCU에 펌웨어를 올리는 절차.
 
 1. 최초 1회 `deploy/sync.sh --init`.
     - 전송 후 `PI_CONFIG/printc` 링크를 만듦.
-    - `printer.cfg`가 없을 때만 include 한 줄로 생성.
-    - 있으면 덮어쓰지 않고 교체할 한 줄을 안내.
+    - `printer.cfg`, `moonraker.conf` 각각 없을 때만 include 한 줄로 생성.
+    - 있으면 덮어쓰지 않고 교체할 한 줄을 안내. KIAUH가 만든 `moonraker.conf`가 이 경우.
+        - 안내된 한 줄로 직접 교체. 기존 KIAUH 설정은 사라짐.
+    - `moonraker.conf`를 만들거나 바꾸면 `sudo service moonraker restart`. 이후에도 같음.
+        - `deploy/sync.sh`는 Klipper만 재시작.
 2. `deploy/sync.sh -n`으로 보낼 파일 미리보기.
 3. `deploy/sync.sh` 실행. 전송 후 Moonraker API로 Klipper 재시작.
     - 인쇄 중(`printing`, `paused`)이면 전송 전에 중단하고 종료 1.
