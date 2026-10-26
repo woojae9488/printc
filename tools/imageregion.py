@@ -354,6 +354,8 @@ def background_labels(labels: np.ndarray, valid: np.ndarray, photo: bool) -> set
     """가장자리 띠와 닿은 색. 사진은 이 비율 이상 차지한 색 전부(천, 스티커 바탕), 아니면 가장 많은 색 하나."""
     ring = labels[_edge_ring(valid)]
     ring = ring[ring >= 0]
+    if not len(ring):
+        raise ImageRegionError("대상 가장자리를 찾지 못함: --no-photo 검토")
     shares = np.bincount(ring, minlength=int(labels.max()) + 1) / len(ring)
     found = {int(i) for i in np.flatnonzero(shares >= EDGE_BACKGROUND_SHARE)} if photo else set()
     return found or {int(shares.argmax())}
@@ -367,6 +369,8 @@ def quantize(rgb: np.ndarray, colors: int, simplify: bool, draw_background: bool
     draw_background면 사진은 배경 중 면적이 가장 큰 색만 그리고, 아니면 배경을 빼지 않음.
     """
     valid = np.ones(rgb.shape[:2], dtype=bool) if valid is None else valid
+    if not valid.any():
+        raise ImageRegionError("대상 영역이 비어 있음: --no-photo 검토")
     features = _features(rgb)
     # 한 색이면 배경과 가까운 진한 색이 배경 군집에 먹히지 않게 넉넉히 나눈 뒤 배경이 아닌 것을 한 색으로 묶음.
     spare = SILHOUETTE_CLUSTERS - 1 if colors == 1 else colors

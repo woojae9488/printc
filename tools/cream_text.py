@@ -12,9 +12,11 @@ import argparse
 import ast
 import configparser
 import math
+import os
 import re
 import sys
-from contextlib import contextmanager
+import tempfile
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
@@ -817,18 +819,37 @@ def make_job(args: argparse.Namespace, machine: Machine, lines: list[str], char_
     )
 
 
-def save_gcode(gcode: str, volumes: dict[int, float], out: Path, root: Path, note: str = "") -> str:
-    """gcode를 쓰고 생성 메시지 한 줄을 반환함. note는 크림 부피 앞에 붙일 설명."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(gcode, encoding="utf-8")
+def write_files(files: list[tuple[Path, str]]) -> None:
+    """여러 파일을 한꺼번에 씀. 같은 폴더의 임시 파일에 모두 쓴 뒤 바꿔치므로, 쓰다 실패하면 기존 파일을 건드리지 않음.
+
+    임시 파일 이름은 매번 새로 만들어 사용자 파일, 심링크와 겹치지 않음.
+    """
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path, text in files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+            os.close(fd)
+            tmp = Path(name)
+            staged.append((tmp, path))
+            tmp.write_text(text, encoding="utf-8")
+            tmp.chmod(0o644)
+        for tmp, path in staged:
+            tmp.replace(path)
+    finally:
+        for tmp, _ in staged:
+            with suppress(OSError):
+                tmp.unlink(missing_ok=True)
+
+
+def gcode_summary(volumes: dict[int, float], out: Path, root: Path, note: str = "") -> str:
+    """생성 메시지 한 줄. note는 크림 부피 앞에 붙일 설명."""
     summary = ", ".join(f"T{t} {v:.1f} mL" for t, v in sorted(volumes.items()))
     prefix = f"{note}, " if note else ""
     return f"생성: {out.relative_to(root)} ({prefix}짜는 크림 {summary}, PRIME 제외)"
 
 
-def write_preview(job: Job, layout: TextLayout, preview: Path, root: Path) -> str:
-    preview.parent.mkdir(parents=True, exist_ok=True)
-    preview.write_text(preview_svg(job, layout), encoding="utf-8")
+def preview_summary(preview: Path, root: Path) -> str:
     return f"미리 보기: {preview.relative_to(root)}"
 
 
@@ -836,9 +857,11 @@ def write_outputs(machine: Machine, job: Job, layout: TextLayout, out: Path, pre
                   root: Path, detail: str) -> str:
     """gcode와 미리 보기를 쓰고 완료 메시지를 반환함. detail은 생성 줄 다음에 넣을 줄."""
     gcode, volumes = build_gcode(machine, job, layout)
-    lines = [save_gcode(gcode, volumes, out, root), detail]
+    files = [(out, gcode)] + ([(preview, preview_svg(job, layout))] if preview else [])
+    write_files(files)
+    lines = [gcode_summary(volumes, out, root), detail]
     if preview:
-        lines.append(write_preview(job, layout, preview, root))
+        lines.append(preview_summary(preview, root))
     return "\n".join(lines)
 
 

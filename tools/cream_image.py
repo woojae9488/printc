@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import re
 import sys
@@ -176,7 +177,7 @@ def numbered(path: Path, index: int, count: int) -> Path:
 def _stale(out: Path, written: list[Path]) -> list[str]:
     """이번에 쓰지 않은 같은 이름의 gcode(--out 그대로, 순번 붙은 것). 오래된 파일을 실행하지 않게 알림."""
     pattern = re.compile(rf"^{re.escape(out.stem)}(_\d+)?{re.escape(out.suffix)}$")
-    return sorted(p.name for p in out.parent.glob(f"{out.stem}*{out.suffix}")
+    return sorted(p.name for p in out.parent.glob(f"{glob.escape(out.stem)}*{glob.escape(out.suffix)}")
                   if p not in written and pattern.match(p.name))
 
 
@@ -218,24 +219,31 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
         raise ct.CreamTextError("--size는 0보다 큰 유한한 수여야 함")
     if args.files == "single" and args.colors > machine.tool_count:
         raise ct.CreamTextError(f"--colors {args.colors} > 카트리지 {machine.tool_count}개: --files split 사용")
+    # 인자 오류는 이미지를 읽기 전에 알림. 남는 색 수와 상관없이 같은 인자는 늘 같은 결과가 되게 함.
+    if args.colors > 1 and (args.border or args.flowers):
+        raise ct.CreamTextError("--colors 2 이상이면 --border, --flowers 사용 불가(T1, T2를 씀): --colors 1 사용")
+    if args.draw_background and args.colors < 2:
+        raise ct.CreamTextError("--draw-background는 --colors 2 이상(배경도 한 색으로 셈, 1색이면 전체가 채워짐)")
     label = _label(args.image)
     job = ct.make_job(args, machine, [label], args.size)
-    # 이미지를 읽기 전에 작업 값 오류를 알림. build_gcode는 단독 호출 대비로 다시 확인함.
+    # build_gcode는 단독 호출 대비로 작업 값을 다시 확인함.
     ct.check_job(machine, job)
     source = backend.load_regions(opts)
     layers = image_layers(job, source, opts, backend.trace_region)
-    if len(layers) > 1 and (job.border or job.flowers):
-        raise ct.CreamTextError("색이 둘 이상이면 --border, --flowers 사용 불가(T1, T2를 씀): --colors 1 사용")
     single = args.files == "single"
     merged = combine(label, layers, per_tool=single)
-    # 하나라도 실패하면 아무것도 쓰지 않도록 경로 검증과 gcode 생성을 모두 마친 뒤 씀.
+    # 하나라도 실패하면 아무것도 남기지 않도록 경로 검증과 gcode 생성을 모두 마치고 한꺼번에 씀.
     if single:
         jobs = [(out, merged, ", ".join(f"T{t} {layer.color}" for t, layer in enumerate(layers)))]
     else:
         jobs = [(ct.resolve_output(numbered(out, i, len(layers)), root, "--out", ".gcode"), layer.layout, layer.color)
                 for i, layer in enumerate(layers, 1)]
     built = [(path, *ct.build_gcode(machine, job, layout, TOOL_NAME), note) for path, layout, note in jobs]
-    lines = [ct.save_gcode(gcode, volumes, path, root, note) for path, gcode, volumes, note in built]
+    files = [(path, gcode) for path, gcode, _, _ in built]
+    if preview:
+        files.append((preview, ct.preview_svg(job, merged)))
+    ct.write_files(files)
+    lines = [ct.gcode_summary(volumes, path, root, note) for path, _, volumes, note in built]
     lines += [f"경고: 이전 실행의 파일이 남아 있음(실행 금지): {name}" for name in _stale(out, [b[0] for b in built])]
     lines.append(f"그림 크기 {merged.char_height:.1f} mm({'자동' if merged.auto_height else '지정'})")
     if source.photo:
@@ -243,7 +251,7 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
     if len(layers) < args.colors:
         lines.append(f"색 {len(layers)}개만 남음(요청 {args.colors}개): 비슷한 색은 합치고 작은 색은 뺌")
     if preview:
-        lines.append(ct.write_preview(job, merged, preview, root))
+        lines.append(ct.preview_summary(preview, root))
     return "\n".join(lines), merged
 
 

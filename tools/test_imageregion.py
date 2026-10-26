@@ -135,6 +135,16 @@ class QuantizeTest(unittest.TestCase):
         self.assertEqual(smooth[30, 30], smooth[40, 40])
         self.assertEqual(smooth[80, 5], smooth[0, 0])
 
+    def test_empty_subject_mask_is_an_error(self) -> None:
+        rgb = np.full((20, 20, 3), 255, dtype=np.uint8)
+        with self.assertRaisesRegex(ir.ImageRegionError, "대상 영역이 비어"):
+            ir.quantize(rgb, 2, simplify=False, draw_background=False, valid=np.zeros((20, 20), dtype=bool), photo=True)
+
+    def test_background_without_edge_pixels_is_an_error(self) -> None:
+        labels = np.full((20, 20), -1)
+        with self.assertRaisesRegex(ir.ImageRegionError, "가장자리를 찾지 못함"):
+            ir.background_labels(labels, np.ones((20, 20), dtype=bool), photo=True)
+
 
 class LoadRegionsTest(TempDirTest):
     def test_layers_by_area_with_shared_center(self) -> None:

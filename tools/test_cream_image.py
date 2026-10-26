@@ -265,17 +265,57 @@ class CliTest(TempProfileTest):
         self.assertEqual(code, 0)
         self.assertIn("색 1개만 남음(요청 3개)", out)
 
-    def test_border_and_flowers_only_for_one_color(self) -> None:
-        code, _, err = self.run_image(str(self.color_image()), *PROFILE, "--out", "out/c.gcode", "--border")
-        self.assertEqual(code, 1)
-        self.assertIn("--colors 1", err)
-        code, _, _ = self.run_image(str(self.image()), *PROFILE, "--out", "out/a.gcode", "--border", "--flowers", "6")
+    def test_border_and_flowers_need_one_color_and_fail_before_reading_the_image(self) -> None:
+        missing = str(self.root / "none.png")  # 읽기 전에 막으면 읽기 오류가 아니라 이 오류가 나옴
+        for flag in ("--border", "--flowers"):
+            extra = [flag] if flag == "--border" else [flag, "6"]
+            code, _, err = self.run_image(missing, *PROFILE, "--out", "out/c.gcode", *extra)
+            self.assertEqual(code, 1)
+            self.assertIn("--colors 1", err)
+            self.assertNotIn("읽기 실패", err)
+        code, _, _ = self.run_image(str(self.image()), *PROFILE, "--out", "out/a.gcode", "--colors", "1", "--border",
+                                    "--flowers", "6")
         self.assertEqual(code, 0)
         self.assertEqual(re.findall(r"^T\d$", self.gcode("a.gcode"), re.M), ["T0", "T1", "T2"])
 
+    def test_draw_background_needs_two_colors(self) -> None:
+        code, _, err = self.run_image(str(self.image()), *PROFILE, "--out", "out/a.gcode", "--colors", "1",
+                                      "--draw-background")
+        self.assertEqual(code, 1)
+        self.assertIn("--colors 2 이상", err)
+
+    def test_nothing_is_left_when_a_write_fails(self) -> None:
+        real = Path.write_text
+        calls = []
+
+        def flaky(path: Path, *args: object, **kw: object) -> int:
+            calls.append(path.name)
+            if len(calls) == 2:
+                raise OSError("디스크 가득 참")
+            return real(path, *args, **kw)
+
+        (self.root / "out").mkdir()
+        (self.root / "out" / "c_1.gcode").write_text("이전 실행")
+        with mock.patch.object(Path, "write_text", flaky):
+            code, _, err = self.run_image(str(self.color_image()), *PROFILE, "--out", "out/c.gcode", "--preview",
+                                          "out/c.svg")
+        self.assertEqual((code, "디스크" in err), (1, True))
+        # 기존 파일은 그대로이고 새 파일, 임시 파일은 없음.
+        self.assertEqual(sorted(p.name for p in (self.root / "out").iterdir()), ["c_1.gcode"])
+        self.assertEqual((self.root / "out" / "c_1.gcode").read_text(), "이전 실행")
+
+    def test_stale_check_escapes_glob_characters(self) -> None:
+        (self.root / "out").mkdir()
+        (self.root / "out" / "cake1_9.gcode").write_text("다른 파일")
+        (self.root / "out" / "cake[1]_9.gcode").write_text("이전 파일")
+        _, out, _ = self.run_image(str(self.color_image()), *PROFILE, "--out", "out/cake[1].gcode")
+        self.assertIn("cake[1]_9.gcode", out)
+        self.assertNotIn("cake1_9.gcode", out)
+
     def test_border_and_flowers_shrink_image(self) -> None:
-        plain = self.run_image(str(self.image()), *PROFILE, "--out", "out/a.gcode")[1]
-        framed = self.run_image(str(self.image()), *PROFILE, "--out", "out/b.gcode", "--border", "--flowers", "6")[1]
+        plain = self.run_image(str(self.image()), *PROFILE, "--out", "out/a.gcode", "--colors", "1")[1]
+        framed = self.run_image(str(self.image()), *PROFILE, "--out", "out/b.gcode", "--colors", "1", "--border",
+                                "--flowers", "6")[1]
         self.assertLess(self.size_of(framed), self.size_of(plain))
         limit = ct.text_limit_radius(make_job(char_height=None, border=True, flowers=6))
         # 테두리(T1), 꽃(T2)은 반경 위에 있고 그림(T0)만 limit 안.
