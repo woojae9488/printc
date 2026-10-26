@@ -665,8 +665,16 @@ class LayoutToolsTest(TempProfileTest):
 
     def test_preview_uses_stroke_colors(self) -> None:
         svg = ct.preview_svg(make_job(), self.layout(colors=["#111111", "#222222", "#333333"], fallback={1}))
+        self.assertEqual(re.findall(r'<polyline stroke="([^"]+)"', svg), ["#111111", "#222222", "#333333"])
+        self.assertIn(f'fill="{ct.SVG_COLORS["paper"]}"', svg)  # 밝은 색도 보이게 케이크 바탕을 채움
+        self.assertEqual(svg.count("stroke-opacity"), 1)  # 획 밑 어두운 테두리
+        self.assertIn('stroke-dasharray="1.5 1.5"', svg)  # 폴백 획 표시는 점선
+
+    def test_text_preview_marks_fallback_by_color(self) -> None:
+        svg = ct.preview_svg(make_job(), self.layout(fallback={1}))
         self.assertEqual(re.findall(r'<polyline stroke="([^"]+)"', svg),
-                         ["#111111", ct.SVG_COLORS["fallback"], "#333333"])
+                         [ct.SVG_COLORS["text"], ct.SVG_COLORS["fallback"], ct.SVG_COLORS["text"]])
+        self.assertNotIn(f'fill="{ct.SVG_COLORS["paper"]}"', svg)
 
     def test_nonfinite_job_values(self) -> None:
         machine = ct.load_machine(self.profile)

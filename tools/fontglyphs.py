@@ -29,6 +29,8 @@ Stroke = list[Point]
 STYLES = ("fill", "outline")
 # 폴백 이름별 시도 단계.
 FALLBACKS = {"auto": ("embolden", "center"), "none": (), "embolden": ("embolden",), "center": ("center",)}
+# 영역 변환(trace_region)은 마지막에 굵기 판정 없이 중심선을 그리는 단계(line)를 더한 best도 받음.
+TRACE_FALLBACKS = {**FALLBACKS, "best": ("embolden", "center", "line")}
 FLATTEN_TOLERANCE_MM = 0.1
 # 폰트에 공백 글리프가 없을 때 공백 폭(em 비율).
 DEFAULT_SPACE_EM = 0.25
@@ -446,8 +448,8 @@ def _touches(part: set[Point], adj: dict[Point, set[Point]], covered: BaseGeomet
     return sum(covered.distance(shapely.Point(n)) <= SKELETON_TOUCH_MM for n in ends)
 
 
-def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
-    """덮이지 않은 골격 부분을 중심선으로 그림. 더한 뒤 굵기 부족이 없을 때만 선 목록, 아니면 None."""
+def _center_lines(judge: _Judge, covered: BaseGeometry) -> list[Stroke]:
+    """덮이지 않은 골격 부분의 중심선. 굵기 부족 판정은 하지 않음."""
     adj: dict[Point, set[Point]] = defaultdict(set)
     for part in shapely.get_parts(shapely.line_merge(judge.skeleton.difference(covered))):
         _add_line(adj, part.coords)
@@ -455,10 +457,15 @@ def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
     # 모서리로 삐져나온 짧은 조각은 버리되 덮인 부분 둘을 잇는 조각은 남겨 끊김을 막음.
     _drop_short_parts(adj, SKELETON_MIN_LENGTH_LINE_WIDTHS * lw, lambda part: _touches(part, adj, covered) >= 2)
     chains = _join(_chains(adj), SKELETON_PRUNE_LINE_WIDTHS * lw)
-    lines = [[(x, y) for x, y in LineString(c).simplify(judge.spacing / 2).coords] for c in chains]
+    return [[(x, y) for x, y in LineString(c).simplify(judge.spacing / 2).coords] for c in chains]
+
+
+def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
+    """중심선을 더한 뒤 굵기 부족이 없을 때만 선 목록, 아니면 None."""
+    lines = _center_lines(judge, covered)
     if not lines:
         return None
-    return None if judge.too_thin(covered.union(MultiLineString(lines).buffer(lw / 2))) else lines
+    return None if judge.too_thin(covered.union(MultiLineString(lines).buffer(judge.line_width / 2))) else lines
 
 
 def _thinnest_ratio(region_em: BaseGeometry) -> float | None:
@@ -495,10 +502,12 @@ def trace_region(region: BaseGeometry, ref_height: float, line_width: float, sty
     covered = _cover(region, line_width)
     if not judge.too_thin(covered):
         return GlyphResult(strokes, 0.0, False, style)
-    for stage in FALLBACKS[fallback]:
+    for stage in TRACE_FALLBACKS[fallback]:
         if stage == "embolden" and (grown := _embolden(judge, ref_height)) is not None:
             return GlyphResult(_fill(grown, line_width, style), 0.0, False, stage)
         if stage == "center" and (lines := _center(judge, covered)) is not None:
+            return GlyphResult(strokes + lines, 0.0, False, stage)
+        if stage == "line" and (lines := _center_lines(judge, covered)):
             return GlyphResult(strokes + lines, 0.0, False, stage)
     # 폴백이 모두 실패하면 첫 선 결과를 그대로 두고 굵기 부족으로 표시.
     return GlyphResult(strokes, 0.0, True, style)

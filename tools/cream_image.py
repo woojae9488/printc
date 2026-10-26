@@ -24,6 +24,8 @@ DEFAULT_COLORS = 3
 # 색마다 gcode 하나(split) 또는 카트리지 T0, T1, …로 전환하는 gcode 하나(single).
 FILE_MODES = ("split", "single")
 TOOL_NAME = "cream_image"
+# 자동 폴백 사다리에 마지막으로 중심선 단계(line)를 더한 이름. 그림은 일부가 가늘어도 통째로 빼지 않음.
+TRACE_FALLBACK = "best"
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,7 @@ class ImageOptions:
     draw_background: bool = False
     style: str = "fill"
     fallback: str = "auto"
-    allow_thin: bool = False
+    photo: bool | None = None
 
 
 class LayerLike(Protocol):
@@ -47,6 +49,7 @@ class RegionLike(Protocol):
     layers: list[LayerLike]
     side: float
     reach: float
+    photo: bool
 
     def parts(self, index: int, size: float) -> list[Any]: ...
 
@@ -82,7 +85,7 @@ def open_backend() -> Backend:
 
     def load_regions(opts: ImageOptions) -> RegionLike:
         with ct.as_cream_error(errors):
-            return imageregion.load_regions(opts.path, opts.colors, opts.simplify, opts.draw_background)
+            return imageregion.load_regions(opts.path, opts.colors, opts.simplify, opts.draw_background, opts.photo)
 
     def trace_region(part: Any, ref: float, line_width: float, style: str, fallback: str) -> ct.GlyphLike:
         with ct.as_cream_error(errors):
@@ -98,12 +101,6 @@ def _label(path: Path) -> str:
 
 def _min_size(job: ct.Job) -> float:
     return MIN_SIZE_LINE_WIDTHS * job.line_width
-
-
-def _thin_error(count: int, size: float, auto: bool) -> ct.CreamTextError:
-    grow = "" if auto else "--size 키우기, "
-    return ct.CreamTextError(f"선 폭보다 가는 조각 {count}개 (현재 크기 {size:.1f} mm). "
-                             f"{grow}좁은 --line-width, 적은 --colors, --allow-thin(건너뜀) 검토")
 
 
 def _layer(label: str, color: str, traced: list[ct.GlyphLike], opts: ImageOptions, size: float,
@@ -127,6 +124,7 @@ def image_layers(job: ct.Job, source: RegionLike, opts: ImageOptions, trace: Tra
     """
     room = ct.text_room(job)
     auto = job.char_height is None
+    fallback = TRACE_FALLBACK if opts.fallback == "auto" else opts.fallback
     size = source.side * ct.text_limit_radius(job) / source.reach if auto else job.char_height
     for _ in range(ct.FIT_TRIES):
         if size < _min_size(job):
@@ -134,7 +132,7 @@ def image_layers(job: ct.Job, source: RegionLike, opts: ImageOptions, trace: Tra
         # 윤곽이 이미 케이크 밖이면 획을 만들지 않고 알림. 중심선 폴백이 넘을 수 있는 선 폭만큼은 봐줌.
         if not auto and size * source.reach / source.side > ct.text_limit_radius(job) + job.line_width:
             raise ct.outside_cake(source.side * room / source.reach, "그림이", "그림 크기")
-        traced = [[trace(part, size, job.line_width, opts.style, opts.fallback) for part in source.parts(i, size)]
+        traced = [[trace(part, size, job.line_width, opts.style, fallback) for part in source.parts(i, size)]
                   for i in range(len(source.layers))]
         reach = ct.max_radius([s for glyphs in traced for g in glyphs if not g.too_thin for s in g.strokes])
         if reach <= room:
@@ -145,9 +143,6 @@ def image_layers(job: ct.Job, source: RegionLike, opts: ImageOptions, trace: Tra
         size = fit * ct.FIT_SHRINK
     else:
         raise ct.CreamTextError("그림 크기 맞춤 실패: --size 지정")
-    thin = sum(g.too_thin for glyphs in traced for g in glyphs)
-    if thin and not opts.allow_thin:
-        raise _thin_error(thin, size, auto)
     label = _label(opts.path)
     layers = [_layer(label, source.layers[i].hex, glyphs, opts, size, auto) for i, glyphs in enumerate(traced)]
     layers = [layer for layer in layers if layer]
@@ -204,8 +199,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         f"single: gcode 하나에 T0, T1, …로 전환. 기본 %(default)s")
     p.add_argument("--simplify", action=argparse.BooleanOptionalAction, default=True,
                    help="일러스트처럼 단순화(질감, 잔 얼룩 제거)한 뒤 색을 나눔. 기본 켬")
-    p.add_argument("--draw-background", action="store_true", help="테두리와 가장 많이 닿은 배경색도 그림")
-    ct.add_stroke_args(p, "조각")
+    p.add_argument("--draw-background", action="store_true",
+                   help="배경색도 그림(사진은 스티커 바탕처럼 가장 넓은 것 하나)")
+    p.add_argument("--photo", action=argparse.BooleanOptionalAction, default=None,
+                   help="사진 보정(조명 평탄화, 대상 자르기, 가장자리 색 제외). 생략 시 테두리가 한 색이면 자동")
+    ct.add_stroke_args(p, allow_thin=False)
     return p.parse_args(argv)
 
 
@@ -214,7 +212,7 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
     out = ct.resolve_output(args.out, root, "--out", ".gcode")
     preview = ct.resolve_output(args.preview, root, "--preview", ".svg") if args.preview else None
     opts = ImageOptions(args.image, args.colors, args.simplify, args.draw_background, args.style, args.fallback,
-                        args.allow_thin)
+                        args.photo)
     machine = ct.load_machine(profile, tuple(args.center) if args.center else None)
     if args.size is not None and not (math.isfinite(args.size) and args.size > 0):
         raise ct.CreamTextError("--size는 0보다 큰 유한한 수여야 함")
@@ -224,7 +222,8 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
     job = ct.make_job(args, machine, [label], args.size)
     # 이미지를 읽기 전에 작업 값 오류를 알림. build_gcode는 단독 호출 대비로 다시 확인함.
     ct.check_job(machine, job)
-    layers = image_layers(job, backend.load_regions(opts), opts, backend.trace_region)
+    source = backend.load_regions(opts)
+    layers = image_layers(job, source, opts, backend.trace_region)
     if len(layers) > 1 and (job.border or job.flowers):
         raise ct.CreamTextError("색이 둘 이상이면 --border, --flowers 사용 불가(T1, T2를 씀): --colors 1 사용")
     single = args.files == "single"
@@ -239,6 +238,8 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
     lines = [ct.save_gcode(gcode, volumes, path, root, note) for path, gcode, volumes, note in built]
     lines += [f"경고: 이전 실행의 파일이 남아 있음(실행 금지): {name}" for name in _stale(out, [b[0] for b in built])]
     lines.append(f"그림 크기 {merged.char_height:.1f} mm({'자동' if merged.auto_height else '지정'})")
+    if source.photo:
+        lines.append("사진 보정 적용(끄려면 --no-photo)")
     if len(layers) < args.colors:
         lines.append(f"색 {len(layers)}개만 남음(요청 {args.colors}개): 비슷한 색은 합치고 작은 색은 뺌")
     if preview:

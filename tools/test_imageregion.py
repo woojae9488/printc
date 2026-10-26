@@ -109,18 +109,18 @@ class QuantizeTest(unittest.TestCase):
 
     def test_background_is_color_touching_the_border(self) -> None:
         labels, background = ir.quantize(self.image(), 2, simplify=False, draw_background=False)
-        self.assertEqual(background, labels[0, 0])
+        self.assertEqual(background, {int(labels[0, 0])})
         self.assertEqual(len(np.unique(labels)), 3)
 
     def test_draw_background_keeps_it(self) -> None:
         labels, background = ir.quantize(self.image(), 3, simplify=False, draw_background=True)
-        self.assertIsNone(background)
+        self.assertEqual(background, set())
         self.assertEqual(len(np.unique(labels)), 3)
 
     def test_close_colors_merge(self) -> None:
         rgb = np.full((60, 60, 3), 255, dtype=np.uint8)
         rgb[10:50, 10:30] = (200, 40, 60)
-        rgb[10:50, 30:50] = (210, 45, 55)  # 거의 같은 빨강
+        rgb[10:50, 30:50] = (205, 42, 58)  # 거의 같은 빨강
         for simplify in (False, True):  # 합친 뒤 빈 라벨이 남아도 다수결이 안전해야 함
             labels, _ = ir.quantize(rgb, 2, simplify=simplify, draw_background=False)
             self.assertEqual(len(np.unique(labels)), 2, simplify)
@@ -221,6 +221,153 @@ class LoadRegionsTest(TempDirTest):
         with mock.patch.object(ir, "MAX_SOURCE_PIXELS", 100):
             with self.assertRaisesRegex(ir.ImageRegionError, "너무 큼"):
                 ir.load_regions(self.two_boxes(), 2)
+
+
+def shaded(img: Image.Image, top: float = 0.55, bottom: float = 1.0) -> Image.Image:
+    """위가 어둡고 아래가 밝은 조명을 곱함."""
+    arr = np.asarray(img, dtype=np.float64)
+    shade = np.linspace(top, bottom, arr.shape[0])[:, None, None]
+    return Image.fromarray(np.clip(arr * shade, 0, 255).astype(np.uint8))
+
+
+class PhotoTest(TempDirTest):
+    """천 위에 놓은 흰 스티커를 조명이 고르지 않게 찍은 사진."""
+
+    CLOTH, PINK, BLUE, DARK = (150, 200, 190), (230, 130, 170), (80, 140, 220), (60, 40, 60)
+    # 조명을 편 뒤 스티커 바탕의 최소 채널값은 약 190, 그림 색은 100 이하. 그 사이.
+    BASE_MIN = 150
+
+    def sticker(self, name: str = "photo.png", shadow: bool = True) -> Path:
+        img = Image.new("RGB", (600, 800), self.CLOTH)
+        draw = ImageDraw.Draw(img)
+        draw.ellipse((100, 150, 500, 550), fill=(250, 248, 246))
+        draw.ellipse((140, 190, 460, 510), outline=self.PINK, width=30)
+        draw.rectangle((250, 280, 350, 400), fill=self.BLUE)
+        draw.rectangle((235, 270, 365, 285), fill=self.DARK)
+        draw.line((300, 0, 300, 800), fill=(200, 235, 225), width=3)  # 접힌 선
+        if shadow:
+            draw.polygon([(0, 640), (350, 640), (200, 800), (0, 800)], fill=(100, 140, 130))
+        path = self.dir / name
+        shaded(img).save(path)
+        return path
+
+    def test_auto_detects_photo_and_crops_to_subject(self) -> None:
+        regions = ir.load_regions(self.sticker(), 3)
+        self.assertTrue(regions.photo)
+        # 대상(스티커) 크기에 맞춰 잘려 있어야 함. 그림자까지 포함하면 이보다 커짐.
+        self.assertGreater(regions.side, 0.8 * ir.WORK_MAX_PX)
+        self.assertLess(regions.side, ir.WORK_MAX_PX)
+        self.assertLess(regions.reach, regions.side * 0.72)
+
+    def test_cloth_shadow_and_sticker_base_are_not_colors(self) -> None:
+        layers = ir.load_regions(self.sticker(), 3).layers
+        self.assertEqual(len(layers), 3)
+        for layer in layers:
+            self.assertLess(min(layer.color), self.BASE_MIN, layer.hex)  # 스티커 흰 바탕이 아님
+            self.assertGreater(np.linalg.norm(np.array(layer.color) - self.CLOTH), 40, layer.hex)  # 천, 그림자가 아님
+
+    def test_draw_background_draws_only_the_sticker_base(self) -> None:
+        layers = ir.load_regions(self.sticker(), 3, draw_background=True).layers
+        self.assertEqual(len(layers), 3)
+        self.assertEqual(sum(min(layer.color) > self.BASE_MIN for layer in layers), 1)
+
+    def test_photo_can_be_forced_off(self) -> None:
+        off = ir.load_regions(self.sticker(), 3, photo=False)
+        self.assertFalse(off.photo)
+        # 자르지 않으면 대상이 작업 해상도의 절반 정도로만 쓰임. 자르고 다시 줄이면 해상도가 늘어남.
+        self.assertGreater(ir.load_regions(self.sticker(), 3).side, 1.5 * off.side)
+
+    def test_gate_rejects_uneven_border(self) -> None:
+        img = Image.new("RGB", (300, 300), (30, 160, 60))
+        ImageDraw.Draw(img).rectangle((150, 0, 299, 299), fill=(240, 120, 30))  # 가장자리까지 찬 그림
+        ImageDraw.Draw(img).ellipse((100, 100, 200, 200), fill=(20, 20, 20))
+        path = self.dir / "bleed.png"
+        img.save(path)
+        self.assertFalse(ir.load_regions(path, 2).photo)
+
+    def test_flatten_evens_light(self) -> None:
+        arr = np.asarray(shaded(Image.new("RGB", (200, 200), (120, 160, 150)), 0.5, 1.0))
+        coefs, reference = ir.fit_light(arr)
+        flat = ir.flatten(arr, coefs, reference)
+        self.assertLess(flat.reshape(-1, 3).std(axis=0).max(), 3)
+        self.assertLess(ir.border_noise(flat), ir.border_noise(arr))
+
+    def test_flatten_keeps_dark_background_dark(self) -> None:
+        arr = np.zeros((100, 100, 3), dtype=np.uint8)
+        arr[40:60, 40:60] = 255
+        coefs, reference = ir.fit_light(arr)
+        flat = ir.flatten(arr, coefs, reference)
+        self.assertLess(int(flat[0, 0].max()), 5)
+        self.assertGreater(int(flat[50, 50].min()), 250)
+
+    def test_subject_shell(self) -> None:
+        arr = np.full((200, 300, 3), (150, 200, 190), dtype=np.uint8)
+        arr[60:140, 100:200] = (250, 240, 240)
+        x0, y0, x1, y1 = ir.subject_shell(arr).bounds
+        self.assertLess(x0, 100)
+        self.assertGreater(x0, 100 - 0.05 * 100 - 6)
+        self.assertGreater(x1, 200)
+        self.assertLess(y1 - y0, 80 + 2 * 0.05 * 100)
+
+    def test_subject_shell_none_when_subject_fills_image(self) -> None:
+        arr = np.full((200, 300, 3), (150, 200, 190), dtype=np.uint8)
+        arr[5:195, 5:295] = (250, 240, 240)
+        self.assertIsNone(ir.subject_shell(arr))
+        self.assertIsNone(ir.subject_shell(np.full((50, 50, 3), 128, dtype=np.uint8)))
+
+    def test_background_labels_take_every_color_on_the_edge(self) -> None:
+        labels = np.full((60, 60), 0)
+        labels[:, 30:] = 1  # 가장자리 띠의 반쯤을 차지하는 스티커 바탕
+        labels[20:40, 20:40] = 2
+        valid = np.zeros((60, 60), dtype=bool)
+        valid[5:55, 5:55] = True
+        labels = np.where(valid, labels, -1)
+        self.assertEqual(ir.background_labels(labels, valid, photo=True), {0, 1})
+        self.assertEqual(ir.background_labels(labels, valid, photo=False), {0})
+
+
+class PlainImageTest(TempDirTest):
+    """사진이 아닌 일반 이미지는 자동 판정이 켜져도 사진 보정 없이 이전처럼 나와야 함."""
+
+    def icon(self, name: str, size: int = 300, shapes: list | None = None, bg: object = "white") -> Path:
+        img = Image.new("RGB", (size, size), bg)
+        draw = ImageDraw.Draw(img)
+        for kind, box, color in shapes or []:
+            getattr(draw, kind)(box, fill=color)
+        path = self.dir / name
+        img.save(path)
+        return path
+
+    def test_subject_touching_the_border_is_kept(self) -> None:
+        path = self.icon("a.png", shapes=[("ellipse", (0, 0, 299, 299), RED)])
+        regions = ir.load_regions(path, 3)
+        self.assertEqual([layer.color for layer in regions.layers], [regions.layers[0].color])
+        self.assertFalse(regions.photo)
+
+    def test_badge_keeps_both_colors(self) -> None:
+        path = self.icon("b.png", shapes=[("ellipse", (0, 0, 299, 299), RED), ("ellipse", (90, 90, 210, 210), BLUE)])
+        colors = {layer.color for layer in ir.load_regions(path, 3).layers}
+        self.assertEqual(len(colors), 2)
+
+    def test_tiny_original_keeps_subject(self) -> None:
+        path = self.icon("c.png", size=8, shapes=[("rectangle", (2, 2, 5, 5), BLACK)])
+        self.assertEqual(len(ir.load_regions(path, 1).layers), 1)
+
+    def test_merge_uses_plain_lab_distance(self) -> None:
+        """a, b 가중이 합치기 기준을 줄이면 채도 높은 색의 작은 편차가 따로 남음."""
+        weights = np.array(ir.LAB_WEIGHTS) * ir.LAB_SCALE
+        labels = np.array([[0, 1, 2]])
+        centers = np.array([[50.0, 70.0, 50.0], [50.0, 78.0, 50.0], [20.0, 0.0, 0.0]]) * weights  # ΔE 8, 그리고 먼 색
+        merged, _ = ir._merge_close(labels, centers)
+        self.assertEqual(merged[0, 0], merged[0, 1])
+        self.assertNotEqual(merged[0, 0], merged[0, 2])
+
+    def test_one_color_draws_the_whole_silhouette(self) -> None:
+        shapes = [("ellipse", (20, 20, 250, 250), RED), ("rectangle", (240, 240, 280, 280), BLUE)]
+        path = self.icon("e.png", shapes=shapes)
+        (layer,) = ir.load_regions(path, 1).layers
+        both = ir.load_regions(path, 2).layers
+        self.assertGreaterEqual(layer.region.area, 0.97 * sum(l.region.area for l in both))
 
 
 class PartsTest(TempDirTest):

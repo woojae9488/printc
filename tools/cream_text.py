@@ -43,7 +43,7 @@ FONT_LINE_PITCH_EM = 1.25
 FONT_STYLES = ("fill", "outline")
 FONT_FALLBACKS = ("auto", "none", "embolden", "center")
 # 요약에 보이는 순서. 폰트가 쓴 방법이 스타일과 다르면 폴백임.
-FALLBACK_ORDER = ("embolden", "center")
+FALLBACK_ORDER = ("embolden", "center", "line")
 NO_STROKE_METHOD = "none"
 # 폰트 윤곽 크기는 글자 높이에 비례하지 않으므로(선 폭만큼 안쪽) 줄여 가며 다시 맞춤.
 FIT_TRIES = 6
@@ -51,7 +51,7 @@ FIT_SHRINK = 0.98
 VENV_HINT = ("설치: python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt, "
              "실행: .venv/bin/python tools/cream_text.py ...")
 SVG_COLORS = {"text": "#8d6e63", "fallback": "#e65100", "border": "#1e88e5", "flower": "#d81b60",
-              "travel": "#9e9e9e", "cake": "#bdbdbd"}
+              "travel": "#9e9e9e", "cake": "#bdbdbd", "paper": "#f6efe2", "outline": "#000000"}
 
 Point = tuple[float, float]
 Stroke = list[Point]
@@ -685,10 +685,17 @@ def _svg_points(stroke: Stroke) -> str:
 
 
 def preview_svg(job: Job, layout: TextLayout) -> str:
-    """짜는 경로를 케이크 중심 기준 SVG로 그림. 폴백 획은 색을 달리하고 이동은 점선."""
+    """짜는 경로를 케이크 중심 기준 SVG로 그림. 이동은 점선.
+
+    글씨는 폴백 획의 색을 달리함. 획마다 색이 있으면(그림) 실제 색을 쓰고, 밝은 색도 보이게 케이크 바탕을
+    크림색으로 채우고 획 밑에 어두운 테두리를 깔며, 폴백 획은 위에 주황 점선을 얹음.
+    """
     layout.check()
+    colored = bool(layout.colors)
     base = layout.colors or [SVG_COLORS["text"]] * len(layout.strokes)
-    paths = [(SVG_COLORS["fallback"] if i in layout.fallback else base[i], s) for i, s in enumerate(layout.strokes)]
+    paths = [(base[i] if colored or i not in layout.fallback else SVG_COLORS["fallback"], s)
+             for i, s in enumerate(layout.strokes)]
+    marks = [layout.strokes[i] for i in sorted(layout.fallback)] if colored else []
     if job.border:
         paths.append((SVG_COLORS["border"], border_stroke(job)))
     dots = flower_points(job) if job.flowers else []
@@ -699,11 +706,17 @@ def preview_svg(job: Job, layout: TextLayout) -> str:
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{-r:g} {-r:g} {2 * r:g} {2 * r:g}" '
         f'width="{2 * r:g}mm" height="{2 * r:g}mm">',
-        f'<circle r="{r:g}" fill="none" stroke="{SVG_COLORS["cake"]}" stroke-width="0.5"/>',
+        f'<circle r="{r:g}" fill="{SVG_COLORS["paper"] if colored else "none"}" stroke="{SVG_COLORS["cake"]}" '
+        'stroke-width="0.5"/>',
+        *([f'<g fill="none" stroke="{SVG_COLORS["outline"]}" stroke-opacity="0.3" '
+           f'stroke-width="{job.line_width + 1.2:g}" stroke-linecap="round" stroke-linejoin="round">',
+           *(f'<polyline points="{_svg_points(s)}"/>' for _, s in paths), "</g>"] if colored else []),
         f'<g fill="none" stroke-width="{job.line_width:g}" stroke-linecap="round" stroke-linejoin="round" '
-        'opacity="0.8">',
+        f'opacity="{1 if colored else 0.8}">',
         *(f'<polyline stroke="{color}" points="{_svg_points(s)}"/>' for color, s in paths),
         "</g>",
+        *([f'<g fill="none" stroke="{SVG_COLORS["fallback"]}" stroke-width="0.6" stroke-dasharray="1.5 1.5">',
+           *(f'<polyline points="{_svg_points(s)}"/>' for s in marks), "</g>"] if marks else []),
         *(f'<circle cx="{x:.2f}" cy="{-y:.2f}" r="{job.line_width:g}" fill="{SVG_COLORS["flower"]}"/>'
           for x, y in dots),
     ]
@@ -757,12 +770,13 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--preview", type=Path, help="경로 미리 보기 .svg (저장소 안)")
 
 
-def add_stroke_args(p: argparse.ArgumentParser, part: str) -> None:
-    """채움, 가는 획 처리 인자. part는 도움말에 쓸 단위(글자, 조각)."""
+def add_stroke_args(p: argparse.ArgumentParser, allow_thin: bool = True) -> None:
+    """채움, 가는 획 처리 인자. allow_thin이면 폴백으로도 못 그리는 글자를 건너뛰는 --allow-thin도 받음."""
     p.add_argument("--style", choices=FONT_STYLES, default=FONT_STYLES[0], help="채움 방식. 기본 %(default)s")
     p.add_argument("--fallback", choices=FONT_FALLBACKS, default=FONT_FALLBACKS[0],
                    help="가는 획 처리. 기본 %(default)s")
-    p.add_argument("--allow-thin", action="store_true", help=f"폴백으로도 못 그리는 {part}를 건너뜀")
+    if allow_thin:
+        p.add_argument("--allow-thin", action="store_true", help="폴백으로도 못 그리는 글자를 건너뜀")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -774,7 +788,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     weight_help = ("생략 시 폰트 기본 굵기" if DEFAULT_WEIGHT is None
                    else f"생략 시 기본 폰트는 {DEFAULT_WEIGHT:g}, 그 외는 폰트 기본 굵기")
     p.add_argument("--weight", type=float, help=f"가변 폰트 굵기(wght). {weight_help}")
-    add_stroke_args(p, "글자")
+    add_stroke_args(p)
     return p.parse_args(argv)
 
 

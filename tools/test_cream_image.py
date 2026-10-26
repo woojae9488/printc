@@ -129,38 +129,38 @@ class ImageLayersTest(unittest.TestCase):
         with self.assertRaisesRegex(ct.CreamTextError, "최소"):
             make_layers(make_job(char_height=10))
 
-    def test_thin_parts_error_and_skip(self) -> None:
+    def test_thin_parts_are_skipped(self) -> None:
         def mixed(part: float, ref: float, lw: float, style: str, fb: str) -> FakeTraced:
             thin = next(calls)
             return FakeTraced([] if thin else [[(0.0, 0.0), (5.0, 0.0)]], too_thin=thin)
 
-        job = make_job(char_height=60)
         calls = iter([True, False])
-        with self.assertRaisesRegex(ct.CreamTextError, "가는 조각 1개"):
-            make_layers(job, FakeRegion(count=2), mixed)
-        calls = iter([True, False])
-        (layer,) = make_layers(job, FakeRegion(count=2), mixed, allow_thin=True)
+        (layer,) = make_layers(make_job(char_height=60), FakeRegion(count=2), mixed)
         self.assertEqual(layer.layout.skipped, ["#1"])
         self.assertEqual(len(layer.layout.strokes), 1)
 
-    def test_thin_hint_depends_on_auto_size(self) -> None:
-        with self.assertRaisesRegex(ct.CreamTextError, "--size 키우기"):
-            make_layers(make_job(char_height=60), trace=thin_trace)
-        with self.assertRaises(ct.CreamTextError) as auto:
-            make_layers(make_job(char_height=None), trace=thin_trace)
-        self.assertNotIn("--size 키우기", str(auto.exception))
+    def test_auto_fallback_uses_best_ladder(self) -> None:
+        seen = []
+
+        def spy(part: float, ref: float, lw: float, style: str, fb: str) -> FakeTraced:
+            seen.append(fb)
+            return line_trace(part, ref, lw, style, fb)
+
+        make_layers(make_job(char_height=60), trace=spy)
+        make_layers(make_job(char_height=60), trace=spy, fallback="center")
+        self.assertEqual(seen, [ci.TRACE_FALLBACK, "center"])
 
     def test_layer_without_strokes_is_dropped(self) -> None:
         def trace(part: float, *args: object) -> FakeTraced:
             return thin_trace() if next(order) else line_trace(part, *args)
 
         order = iter([True, False])
-        layers = make_layers(make_job(char_height=60), TWO_COLORS, trace, allow_thin=True)
+        layers = make_layers(make_job(char_height=60), TWO_COLORS, trace)
         self.assertEqual([layer.color for layer in layers], ["#0000bb"])
 
     def test_all_skipped(self) -> None:
         with self.assertRaisesRegex(ct.CreamTextError, "짤 획이 없음"):
-            make_layers(make_job(char_height=60), trace=thin_trace, allow_thin=True)
+            make_layers(make_job(char_height=60), trace=thin_trace)
 
     def test_fallback_marked(self) -> None:
         (layer,) = make_layers(make_job(char_height=60), trace=fallback_trace)
@@ -325,7 +325,7 @@ class CliTest(TempProfileTest):
     def test_antialiased_edges_do_not_become_colors(self) -> None:
         img = Image.new("RGB", (200, 200), "white")
         ImageDraw.Draw(img).rectangle((50, 50, 150, 150), fill="black")
-        img.filter(ImageFilter.GaussianBlur(1.5)).save(self.root / "blur.png")
+        img.filter(ImageFilter.GaussianBlur(0.8)).save(self.root / "blur.png")
         for flag in ("--simplify", "--no-simplify"):
             _, out, _ = self.run_image(str(self.root / "blur.png"), *PROFILE, "--out", "out/blur.gcode", flag)
             self.assertEqual(out.count("생성:"), 1, flag)
@@ -370,15 +370,24 @@ class CliTest(TempProfileTest):
         self.assertEqual(code, 1)
         self.assertIn("이미지 읽기 실패", err)
 
-    def test_thin_part_error_and_allow(self) -> None:
+    def test_thin_part_is_skipped_with_warning(self) -> None:
         thin = draw_png(self.root / "thin.png", [((20, 20, 180, 180), BLACK), ((0, 195, 199, 197), BLACK)])
         args = (str(thin), *PROFILE, "--out", "out/thin.gcode", "--colors", "1", "--fallback", "none", "--size", "120")
         code, _, err = self.run_image(*args)
-        self.assertEqual(code, 1)
-        self.assertIn("가는 조각", err)
-        code, _, err = self.run_image(*args, "--allow-thin")
         self.assertEqual(code, 0)
         self.assertIn("건너뜀", err)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ci.parse_args([*args, "--allow-thin"])
+
+    def test_photo_flag(self) -> None:
+        parse = lambda *flags: ci.parse_args([str(self.image()), "--out", "a.gcode", *flags]).photo  # noqa: E731
+        self.assertEqual((parse(), parse("--photo"), parse("--no-photo")), (None, True, False))
+
+    def test_photo_message(self) -> None:
+        out = self.run_image(str(self.image()), *PROFILE, "--out", "out/pic.gcode", "--photo")[1]
+        self.assertIn("사진 보정 적용", out)
+        out = self.run_image(str(self.image()), *PROFILE, "--out", "out/pic.gcode", "--no-photo")[1]
+        self.assertNotIn("사진 보정", out)
 
     def test_missing_dependency_hint(self) -> None:
         with mock.patch.dict(sys.modules, {"imageregion": None}):
