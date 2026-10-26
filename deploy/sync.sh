@@ -7,7 +7,8 @@ usage() {
 사용법: PI_HOST=<user@host> deploy/sync.sh [-n] [--init] [--no-restart]
   -n            전송 없이 대상 파일 요약, 원격 명령 출력.
   --init        최초 1회. PI_CONFIG/printc를 PI_REPO로 링크.
-                PI_CONFIG/printer.cfg 없을 때만 include 한 줄로 생성. 있으면 그대로 둠.
+                PI_CONFIG/printer.cfg, moonraker.conf 각각 없을 때만 include 한 줄로 생성.
+                있으면 그대로 두고 교체할 한 줄을 안내.
   --no-restart  Klipper 재시작 생략.
 환경 변수:
   PI_HOST     ssh 대상(필수).
@@ -63,16 +64,21 @@ if [[ "$1" == 1 ]]; then
   [[ -L "$link" || ! -e "$link" ]] || err "링크 자리에 파일 있음: $link"
   ln -sfn -- "$repo" "$link"
   printf "링크: %s -> %s\n" "$link" "$repo"
-  cfg="$config/printer.cfg"
-  line="[include printc/hardware/active/printer.cfg]"
-  if [[ ! -e "$cfg" && ! -L "$cfg" ]]; then
-    printf "%s\n" "$line" >"$cfg"
-    printf "printer.cfg 생성: %s\n" "$cfg"
-  elif grep -qxF -- "$line" "$cfg"; then
-    printf "printer.cfg 유지(include 있음): %s\n" "$cfg"
-  else
-    printf "printer.cfg 있음. 덮어쓰지 않음. 내용을 다음 한 줄로 직접 교체: %s\n" "$line"
-  fi
+  # 사용: ensure_include <파일 이름> <include 한 줄>.
+  ensure_include() {
+    local path="$config/$1"
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
+      printf "%s\n" "$2" >"$path"
+      printf "%s 생성: %s\n" "$1" "$path"
+    elif grep -qxF -- "$2" "$path"; then
+      printf "%s 유지(include 있음): %s\n" "$1" "$path"
+    else
+      printf "%s 있음. 덮어쓰지 않음. 내용을 다음 한 줄로 직접 교체: %s\n" "$1" "$2"
+    fi
+  }
+  ensure_include printer.cfg "[include printc/hardware/active/printer.cfg]"
+  ensure_include moonraker.conf "[include printc/klipper/moonraker.conf]"
+  printf "moonraker.conf를 만들거나 바꿨다면 sudo service moonraker restart 필요\n"
 fi
 if [[ "$2" == 1 ]]; then
   moonraker /printer/restart -X POST >/dev/null || err "Klipper 재시작 요청 실패"

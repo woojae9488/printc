@@ -3,6 +3,7 @@
 문구와 폰트로 글씨 gcode를 만드는 방법.
 
 - 도구: `@tools/cream_text.py`. 전체 인자는 `-h`.
+- 이미지로 그리기는 `@docs/drawing.md`.
 - 기호: `vars` = `@hardware/active/cream_vars.cfg` `[gcode_macro _CREAM_CFG]`.
 
 ## 설치

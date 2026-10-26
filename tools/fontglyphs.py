@@ -1,4 +1,4 @@
-"""폰트 윤곽선을 크림 압출 경로로 바꿈.
+"""폰트 윤곽선을 크림 압출 경로로 바꿈. 영역을 경로로 바꾸는 trace_region은 이미지 윤곽에도 씀.
 
 좌표는 mm, 원점은 글자 왼쪽 기준선 위, y 위쪽 양수. 크기는 em 높이(char_height) 기준.
 획이 선 폭보다 얇으면 굵히기(embolden), 중심선(center) 순으로 폴백함.
@@ -29,6 +29,8 @@ Stroke = list[Point]
 STYLES = ("fill", "outline")
 # 폴백 이름별 시도 단계.
 FALLBACKS = {"auto": ("embolden", "center"), "none": (), "embolden": ("embolden",), "center": ("center",)}
+# 영역 변환(trace_region)은 마지막에 굵기 판정 없이 중심선을 그리는 단계(line)를 더한 best도 받음.
+TRACE_FALLBACKS = {**FALLBACKS, "best": ("embolden", "center", "line")}
 FLATTEN_TOLERANCE_MM = 0.1
 # 폰트에 공백 글리프가 없을 때 공백 폭(em 비율).
 DEFAULT_SPACE_EM = 0.25
@@ -446,8 +448,8 @@ def _touches(part: set[Point], adj: dict[Point, set[Point]], covered: BaseGeomet
     return sum(covered.distance(shapely.Point(n)) <= SKELETON_TOUCH_MM for n in ends)
 
 
-def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
-    """덮이지 않은 골격 부분을 중심선으로 그림. 더한 뒤 굵기 부족이 없을 때만 선 목록, 아니면 None."""
+def _center_lines(judge: _Judge, covered: BaseGeometry) -> list[Stroke]:
+    """덮이지 않은 골격 부분의 중심선. 굵기 부족 판정은 하지 않음."""
     adj: dict[Point, set[Point]] = defaultdict(set)
     for part in shapely.get_parts(shapely.line_merge(judge.skeleton.difference(covered))):
         _add_line(adj, part.coords)
@@ -455,10 +457,15 @@ def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
     # 모서리로 삐져나온 짧은 조각은 버리되 덮인 부분 둘을 잇는 조각은 남겨 끊김을 막음.
     _drop_short_parts(adj, SKELETON_MIN_LENGTH_LINE_WIDTHS * lw, lambda part: _touches(part, adj, covered) >= 2)
     chains = _join(_chains(adj), SKELETON_PRUNE_LINE_WIDTHS * lw)
-    lines = [[(x, y) for x, y in LineString(c).simplify(judge.spacing / 2).coords] for c in chains]
+    return [[(x, y) for x, y in LineString(c).simplify(judge.spacing / 2).coords] for c in chains]
+
+
+def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
+    """중심선을 더한 뒤 굵기 부족이 없을 때만 선 목록, 아니면 None."""
+    lines = _center_lines(judge, covered)
     if not lines:
         return None
-    return None if judge.too_thin(covered.union(MultiLineString(lines).buffer(lw / 2))) else lines
+    return None if judge.too_thin(covered.union(MultiLineString(lines).buffer(judge.line_width / 2))) else lines
 
 
 def _thinnest_ratio(region_em: BaseGeometry) -> float | None:
@@ -482,6 +489,28 @@ def _thinnest_ratio(region_em: BaseGeometry) -> float | None:
         mid = math.sqrt(lo * hi)
         lo, hi = (mid, hi) if fits(mid) else (lo, mid)
     return lo
+
+
+def trace_region(region: BaseGeometry, ref_height: float, line_width: float, style: str = "fill",
+                 fallback: str = "auto") -> GlyphResult:
+    """영역(mm)을 크림 경로로 바꿈. ref_height는 영역 크기 기준 길이로, 골격 표본 간격과 굵히기 한도에 씀.
+
+    advance, min_char_height는 채우지 않음. 호출자가 필요하면 채움.
+    """
+    strokes = _fill(region, line_width, style)
+    judge = _Judge(region, ref_height, line_width)
+    covered = _cover(region, line_width)
+    if not judge.too_thin(covered):
+        return GlyphResult(strokes, 0.0, False, style)
+    for stage in TRACE_FALLBACKS[fallback]:
+        if stage == "embolden" and (grown := _embolden(judge, ref_height)) is not None:
+            return GlyphResult(_fill(grown, line_width, style), 0.0, False, stage)
+        if stage == "center" and (lines := _center(judge, covered)) is not None:
+            return GlyphResult(strokes + lines, 0.0, False, stage)
+        if stage == "line" and (lines := _center_lines(judge, covered)):
+            return GlyphResult(strokes + lines, 0.0, False, stage)
+    # 폴백이 모두 실패하면 첫 선 결과를 그대로 두고 굵기 부족으로 표시.
+    return GlyphResult(strokes, 0.0, True, style)
 
 
 class OutlineFont:
@@ -577,16 +606,5 @@ class OutlineFont:
         region = self._draw(ch, name, scale, FLATTEN_TOLERANCE_MM)
         if region.is_empty:
             return GlyphResult([], advance, False, "none")
-        min_height = self._min_char_height(ch, name, line_width)
-        strokes = _fill(region, line_width, style)
-        judge = _Judge(region, char_height, line_width)
-        covered = _cover(region, line_width)
-        if not judge.too_thin(covered):
-            return GlyphResult(strokes, advance, False, style, min_height)
-        for stage in FALLBACKS[fallback]:
-            if stage == "embolden" and (grown := _embolden(judge, char_height)) is not None:
-                return GlyphResult(_fill(grown, line_width, style), advance, False, stage, min_height)
-            if stage == "center" and (lines := _center(judge, covered)) is not None:
-                return GlyphResult(strokes + lines, advance, False, stage, min_height)
-        # 폴백이 모두 실패하면 첫 선 결과를 그대로 두고 굵기 부족으로 표시.
-        return GlyphResult(strokes, advance, True, style, min_height)
+        traced = trace_region(region, char_height, line_width, style, fallback)
+        return replace(traced, advance=advance, min_char_height=self._min_char_height(ch, name, line_width))

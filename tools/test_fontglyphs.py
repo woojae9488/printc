@@ -193,6 +193,48 @@ class FontTest(unittest.TestCase):
         return (font or self.font).glyph_paths(ch, CHAR_HEIGHT, LINE_WIDTH, style, fallback)
 
 
+WIDE_LINE = 4.0  # TraceRegionTest의 영역은 mm 단위 그림이라 글자 시험보다 굵은 선을 씀
+
+
+class TraceRegionTest(unittest.TestCase):
+    """글리프가 아닌 영역도 같은 경로 변환을 씀. 글자 전용 값은 채우지 않음."""
+
+    def test_fills_region(self) -> None:
+        result = fg.trace_region(box(0, 0, 40, 20), 40.0, LINE_WIDTH)
+        self.assertEqual((result.method, result.too_thin, result.advance, result.min_char_height),
+                         ("fill", False, 0.0, None))
+        self.assertTrue(result.strokes)
+
+    def test_thin_region_flagged(self) -> None:
+        result = fg.trace_region(box(0, 0, 40, 1), 40.0, LINE_WIDTH, fallback="none")
+        self.assertTrue(result.too_thin)
+
+    def dumbbell(self) -> Polygon:
+        """굵은 원판 둘을 가는 목으로 이은 영역."""
+        return box(0, 0, 30, 30).union(box(60, 0, 90, 30)).union(box(30, 14, 60, 15.5))
+
+    def test_best_fallback_draws_centerline_when_center_fails_the_judge(self) -> None:
+        part = self.dumbbell()
+        with mock.patch.object(fg, "_center", return_value=None):  # 중심선 폴백이 굵기 판정에서 떨어지는 경우
+            self.assertTrue(fg.trace_region(part, 90.0, WIDE_LINE, fallback="auto").too_thin)
+            result = fg.trace_region(part, 90.0, WIDE_LINE, fallback="best")
+        self.assertEqual((result.method, result.too_thin), ("line", False))
+        neck = [s for s in result.strokes if min(x for x, _ in s) <= 31 and max(x for x, _ in s) >= 59]
+        self.assertEqual(len(neck), 1)  # 두 원판을 잇는 중심선 한 줄
+        self.assertTrue(all(13 < y < 17 for _, y in neck[0]))
+
+    def test_best_fallback_stops_at_earlier_stages(self) -> None:
+        self.assertEqual(fg.trace_region(self.dumbbell(), 90.0, WIDE_LINE, fallback="best").method, "center")
+
+    def test_best_fallback_gives_up_when_nothing_is_drawable(self) -> None:
+        speck = box(0, 0, WIDE_LINE / 4, WIDE_LINE / 4)
+        self.assertTrue(fg.trace_region(speck, 90.0, WIDE_LINE, fallback="best").too_thin)
+
+    def test_fallback_stage(self) -> None:
+        result = fg.trace_region(box(0, 0, 40, LINE_WIDTH * 0.8), 40.0, LINE_WIDTH, fallback="embolden")
+        self.assertEqual(result.method, "embolden")
+
+
 class FillTest(FontTest):
     def test_square_rings(self) -> None:
         r = self.paths("A")
