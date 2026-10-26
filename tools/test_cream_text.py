@@ -628,5 +628,54 @@ class ActiveProfileTest(unittest.TestCase):
                                 gap=machine.gap, border=True, flowers=8))
 
 
+class LayoutToolsTest(TempProfileTest):
+    """획마다 카트리지, 미리 보기 색을 줄 수 있음. 글씨는 기본값(T0, 기본 색)."""
+
+    def layout(self, **kw: object) -> ct.TextLayout:
+        strokes = [[(0.0, 0.0), (10.0, 0.0)], [(0.0, 5.0), (10.0, 5.0)], [(0.0, 10.0), (10.0, 10.0)]]
+        return ct.TextLayout(["x"], strokes, **kw)
+
+    def test_default_tool(self) -> None:
+        gcode, _ = ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout())
+        self.assertEqual(re.findall(r"^T\d$", gcode, re.M), ["T0"])
+
+    def test_switches_only_when_tool_changes(self) -> None:
+        gcode, volumes = ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(tools=[0, 0, 2]))
+        self.assertEqual(re.findall(r"^T\d$", gcode, re.M), ["T0", "T2"])
+        self.assertEqual(sorted(volumes), [0, 2])
+
+    def test_tool_beyond_count(self) -> None:
+        with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T3 없음"):
+            ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(tools=[0, 1, 3]))
+
+    def test_negative_tool(self) -> None:
+        with self.assertRaisesRegex(ct.CreamTextError, "카트리지 T-1 없음"):
+            ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(tools=[0, -1, 0]))
+
+    def test_per_stroke_lists_must_match(self) -> None:
+        machine = ct.load_machine(self.profile)
+        with self.assertRaisesRegex(ct.CreamTextError, "tools 길이"):
+            ct.build_gcode(machine, make_job(), self.layout(tools=[0, 1]))
+        with self.assertRaisesRegex(ct.CreamTextError, "colors 길이"):
+            ct.preview_svg(make_job(), self.layout(colors=["#111111"]))
+
+    def test_header_names_tool(self) -> None:
+        gcode, _ = ct.build_gcode(ct.load_machine(self.profile), make_job(), self.layout(), "cream_image")
+        self.assertTrue(gcode.startswith("; printc cream_image: x\n"))
+
+    def test_preview_uses_stroke_colors(self) -> None:
+        svg = ct.preview_svg(make_job(), self.layout(colors=["#111111", "#222222", "#333333"], fallback={1}))
+        self.assertEqual(re.findall(r'<polyline stroke="([^"]+)"', svg),
+                         ["#111111", ct.SVG_COLORS["fallback"], "#333333"])
+
+    def test_nonfinite_job_values(self) -> None:
+        machine = ct.load_machine(self.profile)
+        for name in ("cake_diameter", "margin", "flower_ml"):
+            with self.assertRaisesRegex(ct.CreamTextError, "유한"):
+                ct.check_job(machine, make_job(**{name: float("nan")}))
+        with self.assertRaisesRegex(ct.CreamTextError, "유한"):
+            ct.check_job(machine, make_job(char_height=float("inf")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-"""폰트 윤곽선을 크림 압출 경로로 바꿈.
+"""폰트 윤곽선을 크림 압출 경로로 바꿈. 영역을 경로로 바꾸는 trace_region은 이미지 윤곽에도 씀.
 
 좌표는 mm, 원점은 글자 왼쪽 기준선 위, y 위쪽 양수. 크기는 em 높이(char_height) 기준.
 획이 선 폭보다 얇으면 굵히기(embolden), 중심선(center) 순으로 폴백함.
@@ -484,6 +484,26 @@ def _thinnest_ratio(region_em: BaseGeometry) -> float | None:
     return lo
 
 
+def trace_region(region: BaseGeometry, ref_height: float, line_width: float, style: str = "fill",
+                 fallback: str = "auto") -> GlyphResult:
+    """영역(mm)을 크림 경로로 바꿈. ref_height는 영역 크기 기준 길이로, 골격 표본 간격과 굵히기 한도에 씀.
+
+    advance, min_char_height는 채우지 않음. 호출자가 필요하면 채움.
+    """
+    strokes = _fill(region, line_width, style)
+    judge = _Judge(region, ref_height, line_width)
+    covered = _cover(region, line_width)
+    if not judge.too_thin(covered):
+        return GlyphResult(strokes, 0.0, False, style)
+    for stage in FALLBACKS[fallback]:
+        if stage == "embolden" and (grown := _embolden(judge, ref_height)) is not None:
+            return GlyphResult(_fill(grown, line_width, style), 0.0, False, stage)
+        if stage == "center" and (lines := _center(judge, covered)) is not None:
+            return GlyphResult(strokes + lines, 0.0, False, stage)
+    # 폴백이 모두 실패하면 첫 선 결과를 그대로 두고 굵기 부족으로 표시.
+    return GlyphResult(strokes, 0.0, True, style)
+
+
 class OutlineFont:
     """폰트 파일 하나. 가변 폰트는 weight 를 주면 그 wght 인스턴스, 아니면 기본 인스턴스를 씀."""
 
@@ -577,16 +597,5 @@ class OutlineFont:
         region = self._draw(ch, name, scale, FLATTEN_TOLERANCE_MM)
         if region.is_empty:
             return GlyphResult([], advance, False, "none")
-        min_height = self._min_char_height(ch, name, line_width)
-        strokes = _fill(region, line_width, style)
-        judge = _Judge(region, char_height, line_width)
-        covered = _cover(region, line_width)
-        if not judge.too_thin(covered):
-            return GlyphResult(strokes, advance, False, style, min_height)
-        for stage in FALLBACKS[fallback]:
-            if stage == "embolden" and (grown := _embolden(judge, char_height)) is not None:
-                return GlyphResult(_fill(grown, line_width, style), advance, False, stage, min_height)
-            if stage == "center" and (lines := _center(judge, covered)) is not None:
-                return GlyphResult(strokes + lines, advance, False, stage, min_height)
-        # 폴백이 모두 실패하면 첫 선 결과를 그대로 두고 굵기 부족으로 표시.
-        return GlyphResult(strokes, advance, True, style, min_height)
+        traced = trace_region(region, char_height, line_width, style, fallback)
+        return replace(traced, advance=advance, min_char_height=self._min_char_height(ch, name, line_width))
