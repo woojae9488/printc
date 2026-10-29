@@ -11,9 +11,9 @@ import itertools
 import math
 import struct
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 import shapely
 import shapely.errors
@@ -99,6 +99,7 @@ class GlyphResult:
     min_char_height: float | None = None
 
 
+# noinspection PyPep8Naming
 class _FlattenPen(BasePen):
     """곡선을 허용 오차 안의 꺾은선으로 펴 윤곽 목록에 담음."""
 
@@ -294,11 +295,10 @@ def _prune(adj: dict[Point, set[Point]], limit: float) -> None:
                 changed = True
 
 
-def _drop_short_parts(adj: dict[Point, set[Point]], limit: float,
-                      keep: Callable[[set[Point]], bool] = lambda part: False) -> None:
-    """총 길이가 limit 미만인 연결 조각을 지움. keep 이 참인 조각은 남김."""
+def _components(adj: dict[Point, set[Point]]) -> list[set[Point]]:
     seen: set[Point] = set()
-    for start in list(adj):
+    parts = []
+    for start in adj:
         if start in seen:
             continue
         part, stack = {start}, [start]
@@ -308,12 +308,20 @@ def _drop_short_parts(adj: dict[Point, set[Point]], limit: float,
                     part.add(m)
                     stack.append(m)
         seen |= part
+        parts.append(part)
+    return parts
+
+
+def _drop_short_parts(adj: dict[Point, set[Point]], limit: float,
+                      keep: Callable[[set[Point]], bool] = lambda part: False) -> None:
+    """총 길이가 limit 미만인 연결 조각을 지움. keep 이 참인 조각은 남김."""
+    for part in _components(adj):
         if sum(math.dist(a, b) for a in part for b in adj[a]) / 2 < limit and not keep(part):
             for n in part:
                 del adj[n]
 
 
-def _add_line(adj: dict[Point, set[Point]], coords: object) -> None:
+def _add_line(adj: dict[Point, set[Point]], coords: Iterable[Point]) -> None:
     pts = [(round(x, SKELETON_COORD_DIGITS), round(y, SKELETON_COORD_DIGITS)) for x, y in coords]
     for a, b in zip(pts, pts[1:]):
         if a != b:
@@ -348,30 +356,44 @@ def _direction(path: Stroke, reach: float) -> Point:
     return dx / norm, dy / norm
 
 
+def _chain_ends(chains: list[Stroke]) -> dict[Point, list[tuple[int, bool]]]:
+    """열린 사슬의 끝점별 (사슬 번호, 꼬리 끝인지) 목록."""
+    ends: dict[Point, list[tuple[int, bool]]] = defaultdict(list)
+    for i, c in enumerate(chains):
+        if c[0] != c[-1]:
+            ends[c[0]].append((i, False))
+            ends[c[-1]].append((i, True))
+    return ends
+
+
+def _straightness(chains: list[Stroke], reach: float, i: int, i_tail: bool, j: int, j_tail: bool) -> float:
+    """두 사슬이 공유 끝점에서 뻗는 방향의 내적. 작을수록 곧게 이어짐."""
+    u = _direction(chains[i][::-1] if i_tail else chains[i], reach)
+    v = _direction(chains[j][::-1] if j_tail else chains[j], reach)
+    return u[0] * v[0] + u[1] * v[1]
+
+
+def _straightest_pair(chains: list[Stroke], reach: float) -> tuple[float, int, bool, int, bool] | None:
+    """끝점을 공유하는 두 사슬 중 가장 곧게 이어지는(방향 내적이 가장 작은) 쌍."""
+    best = None
+    for group in _chain_ends(chains).values():
+        for (i, i_tail), (j, j_tail) in itertools.combinations(group, 2):
+            if i == j:
+                continue
+            score = _straightness(chains, reach, i, i_tail, j, j_tail)
+            if best is None or score < best[0]:
+                best = (score, i, i_tail, j, j_tail)
+    return best
+
+
 def _join(chains: list[Stroke], reach: float) -> list[Stroke]:
     """끝점을 공유하는 사슬을 가장 곧게 이어지는 쌍부터 이어 붙여 선 수를 줄임."""
-    while True:
-        ends: dict[Point, list[tuple[int, bool]]] = defaultdict(list)
-        for i, c in enumerate(chains):
-            if c[0] != c[-1]:
-                ends[c[0]].append((i, False))
-                ends[c[-1]].append((i, True))
-        best = None
-        for group in ends.values():
-            for (i, i_tail), (j, j_tail) in itertools.combinations(group, 2):
-                if i == j:
-                    continue
-                u = _direction(chains[i][::-1] if i_tail else chains[i], reach)
-                v = _direction(chains[j][::-1] if j_tail else chains[j], reach)
-                score = u[0] * v[0] + u[1] * v[1]
-                if best is None or score < best[0]:
-                    best = (score, i, i_tail, j, j_tail)
-        if best is None:
-            return chains
+    while (best := _straightest_pair(chains, reach)) is not None:
         _, i, i_tail, j, j_tail = best
         head = chains[i] if i_tail else chains[i][::-1]
         tail = chains[j][::-1] if j_tail else chains[j]
         chains = [c for k, c in enumerate(chains) if k not in (i, j)] + [head + tail[1:]]
+    return chains
 
 
 def _skeleton(region: BaseGeometry, spacing: float, line_width: float) -> BaseGeometry:
@@ -451,8 +473,8 @@ def _touches(part: set[Point], adj: dict[Point, set[Point]], covered: BaseGeomet
 def _center_lines(judge: _Judge, covered: BaseGeometry) -> list[Stroke]:
     """덮이지 않은 골격 부분의 중심선. 굵기 부족 판정은 하지 않음."""
     adj: dict[Point, set[Point]] = defaultdict(set)
-    for part in shapely.get_parts(shapely.line_merge(judge.skeleton.difference(covered))):
-        _add_line(adj, part.coords)
+    for piece in shapely.get_parts(shapely.line_merge(judge.skeleton.difference(covered))):
+        _add_line(adj, piece.coords)
     lw = judge.line_width
     # 모서리로 삐져나온 짧은 조각은 버리되 덮인 부분 둘을 잇는 조각은 남겨 끊김을 막음.
     _drop_short_parts(adj, SKELETON_MIN_LENGTH_LINE_WIDTHS * lw, lambda part: _touches(part, adj, covered) >= 2)
@@ -470,8 +492,8 @@ def _center(judge: _Judge, covered: BaseGeometry) -> list[Stroke] | None:
 
 def _thinnest_ratio(region_em: BaseGeometry) -> float | None:
     """em 단위 영역이 굵기 부족 없이 채워지는 최대 선 폭/글자 높이 비율."""
-    def fits(ratio: float) -> bool:
-        return not _Judge(region_em, 1.0, ratio).too_thin(_cover(region_em, ratio))
+    def fits(width_ratio: float) -> bool:
+        return not _Judge(region_em, 1.0, width_ratio).too_thin(_cover(region_em, width_ratio))
 
     # 잃는 면적 기준이 선 폭²에 비례해 판정이 단조롭지 않으므로 이분 탐색 전에 작은 쪽부터 훑음.
     ratio = MIN_HEIGHT_RATIO_START
@@ -527,6 +549,7 @@ class OutlineFont:
                 self._font = self._instance(self._font, weight, path)
             self._cmap = self._font.getBestCmap() or {}
             self._glyph_set = self._font.getGlyphSet()
+            # noinspection PyUnresolvedReferences
             self._units_per_em = self._font["head"].unitsPerEm
             self._hmtx = self._font["hmtx"]
         except (OSError, TTLibError, KeyError, AssertionError, struct.error) as exc:
@@ -540,7 +563,7 @@ class OutlineFont:
 
     @staticmethod
     def _instance(font: TTFont, weight: float, path: Path) -> TTFont:
-        axes = {a.axisTag: a for a in font["fvar"].axes} if "fvar" in font else {}
+        axes = {a.axisTag: a for a in font["fvar"].axes} if "fvar" in font.keys() else {}
         if WEIGHT_AXIS not in axes:
             raise FontGlyphError(f"wght 축이 없는 폰트라 굵기 지정 불가: {path}")
         axis = axes[WEIGHT_AXIS]
@@ -567,7 +590,9 @@ class OutlineFont:
             except (shapely.errors.ShapelyError, struct.error) as exc:
                 raise FontGlyphError(f"글리프 처리 실패: {ch!r}: {exc}") from exc
         cached = self._cache[key]
-        return replace(cached, strokes=[list(s) for s in cached.strokes])
+        return GlyphResult(strokes=[list(s) for s in cached.strokes], advance=cached.advance,
+                           too_thin=cached.too_thin, method=cached.method,
+                           min_char_height=cached.min_char_height)
 
     def _draw(self, ch: str, name: str, scale: float, tolerance: float) -> BaseGeometry:
         pen = _FlattenPen(self._glyph_set, scale, tolerance)
@@ -607,4 +632,5 @@ class OutlineFont:
         if region.is_empty:
             return GlyphResult([], advance, False, "none")
         traced = trace_region(region, char_height, line_width, style, fallback)
-        return replace(traced, advance=advance, min_char_height=self._min_char_height(ch, name, line_width))
+        return GlyphResult(strokes=traced.strokes, advance=advance, too_thin=traced.too_thin, method=traced.method,
+                           min_char_height=self._min_char_height(ch, name, line_width))

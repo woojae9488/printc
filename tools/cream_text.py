@@ -616,24 +616,26 @@ def write_dab(w: GcodeWriter, job: Job, point: Point, write_z: float, travel_z: 
     w.move(z=travel_z, speed=m.travel_speed)
 
 
+def _check_ranges(job: Job) -> None:
+    for name in ("cake_diameter", "height", "gap", "lift", "line_width", "line_height", "margin", "border_inset",
+                 "flower_inset", "flower_ml", "char_height"):
+        value = getattr(job, name)
+        if value is not None and not math.isfinite(value):
+            raise CreamTextError(f"{name}는 유한한 수여야 함")
+    for name in ("cake_diameter", "height", "line_width", "line_height", "char_height"):
+        value = getattr(job, name)
+        if value is not None and value <= 0:
+            raise CreamTextError(f"{name}는 0보다 커야 함")
+    for name in ("gap", "lift", "margin", "border_inset", "flower_inset"):
+        if getattr(job, name) < 0:
+            raise CreamTextError(f"{name}는 0 이상이어야 함")
+
+
 def check_job(machine: Machine, job: Job) -> None:
     if job.bead_area > machine.max_cross_section:
         raise CreamTextError(
             f"선 단면 {job.bead_area:.2f} mm² > max_extrude_cross_section {machine.max_cross_section:.2f} mm²")
-    for name in ("cake_diameter", "height", "gap", "lift", "line_width", "line_height", "margin", "border_inset",
-                 "flower_inset", "flower_ml"):
-        if not math.isfinite(getattr(job, name)):
-            raise CreamTextError(f"{name}는 유한한 수여야 함")
-    if job.char_height is not None and not math.isfinite(job.char_height):
-        raise CreamTextError("char_height는 유한한 수여야 함")
-    for name in ("cake_diameter", "height", "line_width", "line_height"):
-        if getattr(job, name) <= 0:
-            raise CreamTextError(f"{name}는 0보다 커야 함")
-    if job.char_height is not None and job.char_height <= 0:
-        raise CreamTextError("char_height는 0보다 커야 함")
-    for name in ("gap", "lift", "margin", "border_inset", "flower_inset"):
-        if getattr(job, name) < 0:
-            raise CreamTextError(f"{name}는 0 이상이어야 함")
+    _check_ranges(job)
     for name, used in (("margin", True), ("border_inset", job.border), ("flower_inset", bool(job.flowers))):
         if used and getattr(job, name) >= job.cake_radius:
             raise CreamTextError(f"{name} {getattr(job, name):g} mm >= 케이크 반경 {job.cake_radius:g} mm")

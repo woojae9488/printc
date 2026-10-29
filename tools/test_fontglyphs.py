@@ -22,6 +22,7 @@ try:
     from fontTools.ttLib.ttCollection import TTCollection
     import shapely.errors
     from shapely.geometry import MultiLineString, Point as ShapelyPoint, Polygon, box
+    from shapely.geometry.base import BaseGeometry
 
     import fontglyphs as fg
     import fontsrc
@@ -209,7 +210,8 @@ class TraceRegionTest(unittest.TestCase):
         result = fg.trace_region(box(0, 0, 40, 1), 40.0, LINE_WIDTH, fallback="none")
         self.assertTrue(result.too_thin)
 
-    def dumbbell(self) -> Polygon:
+    @staticmethod
+    def dumbbell() -> Polygon:
         """굵은 원판 둘을 가는 목으로 이은 영역."""
         return box(0, 0, 30, 30).union(box(60, 0, 90, 30)).union(box(30, 14, 60, 15.5))
 
@@ -345,6 +347,7 @@ class DefenseTest(FontTest):
     def test_units_per_em_range(self) -> None:
         for upm in (8, 20000):
             font = TTFont(self.dir / "t.ttf")
+            # noinspection PyPep8Naming,PyUnresolvedReferences
             font["head"].unitsPerEm = upm
             path = self.dir / f"upm{upm}.ttf"
             font.save(path)
@@ -352,12 +355,14 @@ class DefenseTest(FontTest):
                 fg.OutlineFont(path)
 
     def test_point_limit(self) -> None:
+        font = fg.OutlineFont(self.dir / "t.ttf")
         with mock.patch.object(fg, "MAX_GLYPH_POINTS", 3), self.assertRaisesRegex(fg.FontGlyphError, "점이"):
-            fg.OutlineFont(self.dir / "t.ttf").glyph_paths("A", CHAR_HEIGHT, LINE_WIDTH)
+            font.glyph_paths("A", CHAR_HEIGHT, LINE_WIDTH)
 
     def test_contour_limit(self) -> None:
+        font = fg.OutlineFont(self.dir / "t.ttf")
         with mock.patch.object(fg, "MAX_GLYPH_CONTOURS", 1), self.assertRaisesRegex(fg.FontGlyphError, "윤곽이"):
-            fg.OutlineFont(self.dir / "t.ttf").glyph_paths("O", CHAR_HEIGHT, LINE_WIDTH)
+            font.glyph_paths("O", CHAR_HEIGHT, LINE_WIDTH)
 
     def test_corrupt_glyph(self) -> None:
         # 윤곽 수를 부풀리면 fontTools 가 struct.error 를 냄.
@@ -367,8 +372,9 @@ class DefenseTest(FontTest):
         struct.pack_into(">h", data, offset, 30000)
         path = self.dir / "corrupt.ttf"
         path.write_bytes(bytes(data))
+        font = fg.OutlineFont(path)
         with self.assertRaisesRegex(fg.FontGlyphError, "글리프 읽기 실패"):
-            fg.OutlineFont(path).glyph_paths("A", CHAR_HEIGHT, LINE_WIDTH)
+            font.glyph_paths("A", CHAR_HEIGHT, LINE_WIDTH)
 
     def test_bad_metrics(self) -> None:
         font = fg.OutlineFont(self.dir / "t.ttf")
@@ -454,10 +460,12 @@ class FallbackTest(FontTest):
 SLIVER_LINE_WIDTHS_SQ = 0.01
 
 
-def region_of(font: fg.OutlineFont, ch: str, char_height: float) -> Polygon:
+# noinspection PyProtectedMember
+def region_of(font: fg.OutlineFont, ch: str, char_height: float) -> BaseGeometry:
     return font._draw(ch, font._cmap[ord(ch)], char_height / font._units_per_em, fg.FLATTEN_TOLERANCE_MM)
 
 
+# noinspection PyProtectedMember
 def check_structure(test: unittest.TestCase, font: fg.OutlineFont, ch: str, r: fg.GlyphResult,
                     char_height: float, line_width: float) -> None:
     """선 자국이 원 영역 조각마다 하나로 이어지고 영역을 거의 다 덮음."""

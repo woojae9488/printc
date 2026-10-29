@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -31,8 +32,8 @@ CHUNK_BYTES = 64 * 1024
 FONT_SUFFIXES = (".ttf", ".otf")
 FONT_MAGICS = (b"\x00\x01\x00\x00", b"OTTO", b"true")
 TTC_MAGIC = b"ttcf"
-DIR_MODE = 0o755
-FILE_MODE = 0o644
+DIR_MODE = 0o700
+FILE_MODE = 0o600
 PATH_LIKE = re.compile(r"[/\\]|^[~.]|\.[A-Za-z0-9]{2,5}$")
 USER_AGENT = "printc-fontsrc"
 HTTP_FORBIDDEN = 403
@@ -91,7 +92,7 @@ def pick_font(names: list[str]) -> str:
     ttf = [n for n in fonts if n.lower().endswith(".ttf")]
     tiers = (
         [n for n in ttf if "-Regular" in n and "[" not in n],
-        [n for n in ttf if re.search(r"\[[^\]]*wght[^\]]*\]", n) and "Italic" not in n],
+        [n for n in ttf if re.search(r"\[[^]]*wght", n) and "Italic" not in n],
     )
     for tier in tiers:
         exact = [n for n in tier if n.endswith("-Regular.ttf")]
@@ -181,14 +182,14 @@ def _network_error(url: str, exc: Exception) -> FontError:
 def _listing(license_dir: str, slug: str) -> list[dict] | None:
     """디렉터리 목록. 없으면 None."""
     url = LISTING_URL.format(license=license_dir, slug=slug)
-    buf = tempfile.SpooledTemporaryFile(max_size=MAX_LISTING_BYTES)
+    buf = io.BytesIO()
     try:
         _stream(url, MAX_LISTING_BYTES, buf)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
         raise _network_error(url, exc) from exc
-    except (urllib.error.URLError, OSError) as exc:
+    except OSError as exc:
         raise _network_error(url, exc) from exc
     buf.seek(0)
     try:
@@ -208,7 +209,7 @@ def _download(url: str, dest: Path) -> None:
         with os.fdopen(fd, "wb") as f:
             try:
                 _stream(url, MAX_FONT_BYTES, f)
-            except (urllib.error.URLError, OSError) as exc:
+            except OSError as exc:
                 raise _network_error(url, exc) from exc
             f.flush()
             os.fsync(f.fileno())

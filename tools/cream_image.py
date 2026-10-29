@@ -15,7 +15,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 import cream_text as ct
 
@@ -41,13 +41,14 @@ class ImageOptions:
 
 
 class LayerLike(Protocol):
-    hex: str
+    @property
+    def hex(self) -> str: ...
 
 
 class RegionLike(Protocol):
     """imageregion.ImageRegions 계약. layers는 짜는 순서."""
 
-    layers: list[LayerLike]
+    layers: Sequence[LayerLike]
     side: float
     reach: float
     photo: bool
@@ -197,7 +198,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="그릴 색 수(배경 제외). 기본 %(default)s")
     p.add_argument("--files", choices=FILE_MODES, default=FILE_MODES[0],
                    help="split: 색마다 gcode 하나(_1, _2, …), 카트리지를 갈아 끼워 차례로 실행. "
-                        f"single: gcode 하나에 T0, T1, …로 전환. 기본 %(default)s")
+                        "single: gcode 하나에 T0, T1, …로 전환. 기본 %(default)s")
     p.add_argument("--simplify", action=argparse.BooleanOptionalAction, default=True,
                    help="일러스트처럼 단순화(질감, 잔 얼룩 제거)한 뒤 색을 나눔. 기본 켬")
     p.add_argument("--draw-background", action="store_true",
@@ -208,6 +209,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _check_args(args: argparse.Namespace, machine: ct.Machine) -> None:
+    """인자 오류는 이미지를 읽기 전에 알림. 남는 색 수와 상관없이 같은 인자는 늘 같은 결과가 되게 함."""
+    if args.size is not None and not (math.isfinite(args.size) and args.size > 0):
+        raise ct.CreamTextError("--size는 0보다 큰 유한한 수여야 함")
+    if args.files == "single" and args.colors > machine.tool_count:
+        raise ct.CreamTextError(f"--colors {args.colors} > 카트리지 {machine.tool_count}개: --files split 사용")
+    if args.colors > 1 and (args.border or args.flowers):
+        raise ct.CreamTextError("--colors 2 이상이면 --border, --flowers 사용 불가(T1, T2를 씀): --colors 1 사용")
+    if args.draw_background and args.colors < 2:
+        raise ct.CreamTextError("--draw-background는 --colors 2 이상(배경도 한 색으로 셈, 1색이면 전체가 채워짐)")
+
+
 def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[str, ct.TextLayout]:
     profile = ct.resolve_inside(args.profile, root, "--profile")
     out = ct.resolve_output(args.out, root, "--out", ".gcode")
@@ -215,15 +228,7 @@ def _generate(args: argparse.Namespace, root: Path, backend: Backend) -> tuple[s
     opts = ImageOptions(args.image, args.colors, args.simplify, args.draw_background, args.style, args.fallback,
                         args.photo)
     machine = ct.load_machine(profile, tuple(args.center) if args.center else None)
-    if args.size is not None and not (math.isfinite(args.size) and args.size > 0):
-        raise ct.CreamTextError("--size는 0보다 큰 유한한 수여야 함")
-    if args.files == "single" and args.colors > machine.tool_count:
-        raise ct.CreamTextError(f"--colors {args.colors} > 카트리지 {machine.tool_count}개: --files split 사용")
-    # 인자 오류는 이미지를 읽기 전에 알림. 남는 색 수와 상관없이 같은 인자는 늘 같은 결과가 되게 함.
-    if args.colors > 1 and (args.border or args.flowers):
-        raise ct.CreamTextError("--colors 2 이상이면 --border, --flowers 사용 불가(T1, T2를 씀): --colors 1 사용")
-    if args.draw_background and args.colors < 2:
-        raise ct.CreamTextError("--draw-background는 --colors 2 이상(배경도 한 색으로 셈, 1색이면 전체가 채워짐)")
+    _check_args(args, machine)
     label = _label(args.image)
     job = ct.make_job(args, machine, [label], args.size)
     # build_gcode는 단독 호출 대비로 작업 값을 다시 확인함.

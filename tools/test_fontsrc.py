@@ -15,6 +15,7 @@ import urllib.request
 import urllib.response
 from contextlib import redirect_stderr
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,6 +42,9 @@ def listing(license_dir: str, slug: str, *names: str) -> bytes:
         {"name": n, "type": "file", "size": len(TTF), "download_url": f"{RAW}/{license_dir}/{slug}/{n}"}
         for n in names
     ]).encode()
+
+
+Net = Callable[..., object]
 
 
 class FakeNet:
@@ -93,6 +97,7 @@ class FakeTransport:
             def http_open(self, req: urllib.request.Request) -> urllib.response.addinfourl:
                 return transport.respond(req)
 
+        # noinspection PyProtectedMember
         return urllib.request.build_opener(fs._RedirectGuard, Https, Http)
 
 
@@ -104,13 +109,13 @@ class CacheTest(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def resolve(self, spec: str, net: FakeNet) -> tuple[Path, str]:
+    def resolve(self, spec: str, net: Net) -> tuple[Path, str]:
         err = io.StringIO()
         with mock.patch.object(fs, "_open", net), redirect_stderr(err):
             path = fs.resolve_font(spec, self.cache)
         return path, err.getvalue()
 
-    def assert_fails(self, spec: str, net: FakeNet, pattern: str) -> None:
+    def assert_fails(self, spec: str, net: Net, pattern: str) -> None:
         with mock.patch.object(fs, "_open", net), redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(fs.FontError, pattern):
                 fs.resolve_font(spec, self.cache)
@@ -180,14 +185,14 @@ class ResolveFamilyTest(CacheTest):
         self.assert_fails("No Such Font", FakeNet({}), "폰트 없음: No Such Font")
 
     def test_offline(self) -> None:
-        def offline(request: object, timeout: float) -> None:
+        def offline(*_: object, **__: object) -> None:
             raise urllib.error.URLError("no network")
 
-        self.assert_fails("Nanum Gothic", offline, "네트워크 오류")  # type: ignore[arg-type]
+        self.assert_fails("Nanum Gothic", offline, "네트워크 오류")
 
     def test_rate_limited(self) -> None:
         def failing(code: int):  # type: ignore[no-untyped-def]
-            def fail(request: object, timeout: float) -> None:
+            def fail(request: object, *_: object) -> None:
                 raise urllib.error.HTTPError(request.full_url, code, "Error", {}, None)  # type: ignore
 
             return fail
@@ -203,7 +208,8 @@ class ResolveFamilyTest(CacheTest):
 
 
 class DownloadSafetyTest(CacheTest):
-    def family(self, name: str, body: bytes | FakeResponse, url: str | None = None) -> FakeNet:
+    @staticmethod
+    def family(name: str, body: bytes | FakeResponse, url: str | None = None) -> FakeNet:
         url = url or f"{RAW}/ofl/foo/{name}"
         items = [{"name": name, "type": "file", "size": 10, "download_url": url}]
         return FakeNet({f"{API}/ofl/foo": json.dumps(items).encode(), url: body})
@@ -262,30 +268,30 @@ class RedirectTest(CacheTest):
         self.patcher = mock.patch.object(fs, "_OPENER", transport.opener())
         return transport
 
-    def resolve_real(self, transport: FakeTransport) -> Path:
+    def resolve_real(self) -> Path:
         with self.patcher, redirect_stderr(io.StringIO()):
             return fs.resolve_font("Foo", self.cache)
 
-    def assert_rejected(self, transport: FakeTransport, pattern: str = "허용되지 않는 주소") -> None:
+    def assert_rejected(self, pattern: str = "허용되지 않는 주소") -> None:
         with self.patcher, redirect_stderr(io.StringIO()), self.assertRaisesRegex(fs.FontError, pattern):
             fs.resolve_font("Foo", self.cache)
 
     def test_redirect_to_other_host_not_followed(self) -> None:
         net = self.run_family({self.FONT: "https://evil.example/Foo-Regular.ttf",
                                "https://evil.example/Foo-Regular.ttf": TTF})
-        self.assert_rejected(net)
+        self.assert_rejected()
         self.assertEqual(net.calls, [self.LISTING, self.FONT])
         self.assertFalse(self.cache.exists() and any(p.is_file() for p in self.cache.rglob("*")))
 
     def test_redirect_listing_to_other_host_not_followed(self) -> None:
         net = self.run_family({self.LISTING: "https://evil.example/list"})
-        self.assert_rejected(net)
+        self.assert_rejected()
         self.assertEqual(net.calls, [self.LISTING])
 
     def test_redirect_to_http_not_followed(self) -> None:
         http = "http://raw.githubusercontent.com/google/fonts/main/ofl/foo/Foo-Regular.ttf"
         net = self.run_family({self.FONT: http, http: TTF})
-        self.assert_rejected(net)
+        self.assert_rejected()
         self.assertEqual(net.calls, [self.LISTING, self.FONT])
 
     def test_redirect_between_allowed_hosts(self) -> None:
@@ -294,7 +300,7 @@ class RedirectTest(CacheTest):
         items = [{"name": "Foo-Regular.ttf", "type": "file", "size": 10, "download_url": self.FONT}]
         net = self.run_family({self.LISTING: moved_list, moved_list: json.dumps(items).encode(),
                                self.FONT: moved_font, moved_font: TTF})
-        path = self.resolve_real(net)
+        path = self.resolve_real()
         self.assertEqual(path.read_bytes(), TTF)
         self.assertEqual(net.calls, [self.LISTING, moved_list, self.FONT, moved_font])
 
@@ -303,16 +309,16 @@ class RedirectTest(CacheTest):
                     f"{RAW}/../../evil/fonts/Foo-Regular.ttf", f"{RAW}/%2e%2e/%2e%2e/evil/Foo-Regular.ttf",
                     "https://api.github.com/repos/evil/Foo-Regular.ttf"):
             net = self.run_family({url: TTF}, download_url=url)
-            self.assert_rejected(net)
+            self.assert_rejected()
             self.assertEqual(net.calls, [self.LISTING])
 
     def test_existing_dir_mode_kept(self) -> None:
         family_dir = self.cache / "foo"
         family_dir.mkdir(parents=True)
-        family_dir.chmod(0o700)
-        net = self.run_family({self.FONT: TTF})
-        self.resolve_real(net)
-        self.assertEqual(stat.S_IMODE(family_dir.stat().st_mode), 0o700)
+        family_dir.chmod(0o750)
+        self.run_family({self.FONT: TTF})
+        self.resolve_real()
+        self.assertEqual(stat.S_IMODE(family_dir.stat().st_mode), 0o750)
 
 
 class PickFontTest(unittest.TestCase):

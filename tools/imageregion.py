@@ -273,12 +273,23 @@ def kmeans_centers(points: np.ndarray, k: int) -> np.ndarray:
     result = _seeds(sample, k)
     for _ in range(KMEANS_ITERS):
         nearest = _distances(sample, result).argmin(axis=1)
-        moved = np.array([sample[nearest == c].mean(axis=0) if (nearest == c).any() else result[c]
-                          for c in range(k)])
+        members = [sample[nearest == c] for c in range(k)]
+        moved = np.array([m.mean(axis=0) if len(m) else result[c] for c, m in enumerate(members)])
         if np.allclose(moved, result):
             break
         result = moved
     return result
+
+
+def _closest_pair(centers: np.ndarray, ids: np.ndarray, plain: np.ndarray) -> tuple[float, int, int] | None:
+    """살아 있는 색 중 가장 가까운 쌍. MERGE_DELTA_E 미만이 없으면 None."""
+    best = None
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            dist = float(np.linalg.norm((centers[a] - centers[b]) / plain))
+            if dist < MERGE_DELTA_E and (best is None or dist < best[0]):
+                best = (dist, a, b)
+    return best
 
 
 def _merge_close(labels: np.ndarray, centers: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -291,13 +302,7 @@ def _merge_close(labels: np.ndarray, centers: np.ndarray) -> tuple[np.ndarray, n
     counts = np.bincount(labels[labels >= 0], minlength=len(centers)).astype(float)
     alive = counts > 0
     while True:
-        ids = np.flatnonzero(alive)
-        best = None
-        for i, a in enumerate(ids):
-            for b in ids[i + 1:]:
-                dist = float(np.linalg.norm((centers[a] - centers[b]) / plain))
-                if dist < MERGE_DELTA_E and (best is None or dist < best[0]):
-                    best = (dist, a, b)
+        best = _closest_pair(centers, np.flatnonzero(alive), plain)
         if best is None:
             return labels, centers
         _, a, b = best
@@ -306,7 +311,7 @@ def _merge_close(labels: np.ndarray, centers: np.ndarray) -> tuple[np.ndarray, n
         counts[keep] += counts[drop]
         counts[drop] = 0
         alive[drop] = False
-        labels = np.where(labels == drop, keep, labels)
+        labels = np.where(np.equal(labels, drop), keep, labels)
 
 
 def _majority(labels: np.ndarray, count: int) -> np.ndarray:
@@ -361,6 +366,20 @@ def background_labels(labels: np.ndarray, valid: np.ndarray, photo: bool) -> set
     return found or {int(shares.argmax())}
 
 
+def _photo_background(features: np.ndarray, valid: np.ndarray, labels: np.ndarray, count: int, spare: int,
+                      simplify: bool, draw_background: bool) -> tuple[np.ndarray, set[int]]:
+    """사진의 배경 라벨. 배경 수를 알면 그릴 색 수를 맞춰 한 번 더 나눔."""
+    background = background_labels(labels, valid, True)
+    needed = max(2, spare + len(background) - (1 if draw_background else 0))
+    if needed != count:
+        labels = _cluster(features, valid, needed, simplify)
+        background = background_labels(labels, valid, True)
+    if draw_background:
+        area = np.bincount(labels[labels >= 0], minlength=int(labels.max()) + 1)
+        background.discard(max(background, key=lambda label: area[label]))
+    return labels, background
+
+
 def quantize(rgb: np.ndarray, colors: int, simplify: bool, draw_background: bool, valid: np.ndarray | None = None,
              photo: bool = False) -> tuple[np.ndarray, set[int]]:
     """색 라벨 배열(대상 밖은 -1)과 뺄 배경 라벨. 배경 몫으로 색을 더 만듦.
@@ -376,17 +395,10 @@ def quantize(rgb: np.ndarray, colors: int, simplify: bool, draw_background: bool
     spare = SILHOUETTE_CLUSTERS - 1 if colors == 1 else colors
     count = spare if draw_background and not photo else spare + 1
     labels = _cluster(features, valid, count, simplify)
-    if not photo:
-        background = set() if draw_background else background_labels(labels, valid, False)
+    if photo:
+        labels, background = _photo_background(features, valid, labels, count, spare, simplify, draw_background)
     else:
-        background = background_labels(labels, valid, True)
-        needed = max(2, spare + len(background) - (1 if draw_background else 0))
-        if needed != count:
-            labels = _cluster(features, valid, needed, simplify)
-            background = background_labels(labels, valid, True)
-        if draw_background:
-            area = np.bincount(labels[labels >= 0], minlength=int(labels.max()) + 1)
-            background.discard(max(background, key=lambda label: area[label]))
+        background = set() if draw_background else background_labels(labels, valid, False)
     if colors == 1:
         drawn = (labels >= 0) & ~np.isin(labels, list(background))
         if drawn.any():
@@ -397,7 +409,9 @@ def quantize(rgb: np.ndarray, colors: int, simplify: bool, draw_background: bool
 # ---------- 영역 ----------
 
 def _polygons(geom: BaseGeometry) -> list[Polygon]:
-    return list(geom.geoms) if isinstance(geom, MultiPolygon) else [geom] if isinstance(geom, Polygon) else []
+    if isinstance(geom, MultiPolygon):
+        return list(geom.geoms)
+    return [geom] if isinstance(geom, Polygon) else []
 
 
 def _clean(geom: BaseGeometry) -> list[Polygon]:
@@ -410,17 +424,22 @@ def _clean(geom: BaseGeometry) -> list[Polygon]:
     return result
 
 
-def mask_region(mask: np.ndarray) -> BaseGeometry:
+def mask_region(mask: np.ndarray) -> MultiPolygon:
     """잉크 픽셀을 다각형으로 묶음. 행마다 이어진 구간을 사각형으로 만들어 합친 뒤 계단을 폄."""
     height = mask.shape[0]
     edges = np.diff(np.pad(mask, ((0, 0), (1, 1))).astype(np.int8), axis=1)
-    rows, starts = np.nonzero(edges == 1)
-    _, ends = np.nonzero(edges == -1)
+    rows, starts = np.nonzero(edges > 0)
+    _, ends = np.nonzero(edges < 0)
     if len(rows) > MAX_RUNS:
         raise ImageRegionError(f"이미지가 너무 복잡함(잉크 구간 {len(rows)}개 > {MAX_RUNS}): 단순한 그림 사용")
     boxes = shapely.box(starts, height - rows - 1, ends, height - rows)
     polys = _clean(shapely.union_all(boxes).simplify(SIMPLIFY_PX, preserve_topology=True))
     return MultiPolygon(polys)
+
+
+def _max_radius(region: BaseGeometry) -> float:
+    coords = shapely.get_coordinates(region)
+    return float(np.hypot(coords[:, 0], coords[:, 1]).max())
 
 
 def _mean_width(region: BaseGeometry) -> float:
@@ -459,7 +478,7 @@ def load_regions(path: Path, colors: int, simplify: bool = True, draw_background
     for label in np.unique(labels):
         if label < 0 or label in background:
             continue
-        region = mask_region(labels == label)
+        region = mask_region(np.equal(labels, label))
         if not region.is_empty:
             found.append((tuple(int(v) for v in rgb[labels == label].mean(axis=0).round()), region))
     found = [item for item in found if _mean_width(item[1]) >= MIN_LAYER_WIDTH_PX]
@@ -471,5 +490,5 @@ def load_regions(path: Path, colors: int, simplify: bool = True, draw_background
     xs0, ys0, xs1, ys1 = zip(*(region.bounds for _, region in found))
     x0, y0, x1, y1 = min(xs0), min(ys0), max(xs1), max(ys1)
     layers = [ColorLayer(color, affinity.translate(region, -(x0 + x1) / 2, -(y0 + y1) / 2)) for color, region in found]
-    reach = max(float(np.hypot(*shapely.get_coordinates(layer.region).T).max()) for layer in layers)
+    reach = max(_max_radius(layer.region) for layer in layers)
     return ImageRegions(layers, max(x1 - x0, y1 - y0), reach, use_photo)
